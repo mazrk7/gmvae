@@ -1,0 +1,424 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
+import numpy as np
+import tensorflow as tf
+import tensorflow_datasets as tfds
+
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.pyplot as plt
+
+import pandas as pd
+import seaborn as sns
+from sklearn.manifold import TSNE
+
+import helpers
+#import gmvae
+import vae
+
+
+# Flattens a Tensor according to the provided 3D-shape Tensor
+def flatten(inputs, shape, name='flattened'):
+    return tf.reshape(inputs, [-1, shape[-3]*shape[-2]*shape[-1]], name=name)
+
+
+# Unflattens a Tensor according to the provided 3D-shape Tensor
+def unflatten(inputs, shape, name='unflattened'):
+    return tf.reshape(inputs, [-1, shape[-3], shape[-2], shape[-1]], name=name)
+
+
+def reduce_dimensionality(data, dim=2, perplexity=40):
+    if(data.shape[-1] > 2):
+        tsne = TSNE(n_components=dim, verbose=1, perplexity=perplexity, n_iter=300)
+        data = tsne.fit_transform(data)
+
+    return data
+
+
+# Creates a logging hook that prints the loss values periodically
+def create_logging_hook(step, train_loss, test_loss, every_steps=50):
+
+    def summary_formatter(log_dict):
+        return "Step %d, %s: %f, %s: %f" % (log_dict['step'], 
+            'train_loss', log_dict['train_loss'],
+            'test_loss', log_dict['test_loss'])
+
+    logging_hook = tf.train.LoggingTensorHook(
+        {'step': step, 
+         'train_loss': train_loss,
+         'test_loss': test_loss},
+        every_n_iter=every_steps,
+        formatter=summary_formatter)
+
+    return logging_hook
+
+
+def create_dataset(config, split, shuffle, repeat):
+    """Creates the MNIST dataset for a given config.
+
+    Args:
+        config: A configuration object with config values accessible as properties.
+            Most likely a FLAGS object. This function expects the properties
+            batch_size, dataset_path, and latent_size to be defined.
+        split: The dataset split to load.
+        shuffle: If true, shuffle the dataset randomly.
+        repeat: If true, repeat the dataset endlessly.
+
+    Returns:
+        images: A batch of image sequences represented as a dense Tensor of 
+            shape [batch_size, IMAGE_SIZE*IMAGE_SIZE*1].
+        targets: A batch of target sequences represented as a dense Tensor of
+            shape [batch_size, IMAGE_SIZE*IMAGE_SIZE*1].
+        image_shape: A shape Tensor for the images contained in the dataset.
+        labels: A batch of integer labels, for use in evaluation of clustering.
+    """
+
+    dataset, datasets_info = tfds.load(name='mnist',
+                                      split=split,
+                                      with_info=True,
+                                      as_supervised=False)
+
+    image_shape = datasets_info.features['image'].shape
+
+    def _preprocess(sample):
+        image = tf.cast(sample['image'], tf.float32) / 255.  # Scale to unit interval
+        image = image < tf.random.uniform(tf.shape(image))   # Randomly binarise
+        return image, image, sample['label']
+
+
+    dataset = (dataset.map(_preprocess)
+                      .batch(config.batch_size)
+                      .prefetch(tf.data.experimental.AUTOTUNE))
+    
+    if repeat:
+        dataset = dataset.repeat()
+    if shuffle:
+        dataset = dataset.shuffle(datasets_info.splits[split].num_examples)
+
+    iterator = dataset.make_one_shot_iterator()
+    images, targets, labels = iterator.get_next()
+
+    flattened_images = flatten(images, image_shape, name=split+'_inputs')
+    flattened_targets = flatten(targets, image_shape, name=split+'_targets')
+
+    return flattened_images, flattened_targets, image_shape, labels
+
+
+def run_train(config):
+    """Runs the training of a latent variable model.
+
+    Args:
+        config: A configuration object with config values accessible as properties.
+    """
+
+
+    def create_graph():
+        """Creates the training graph and loss to be optimised.
+
+        Returns:
+            train_loss: A float Tensor containing the training set's loss value.
+            test_loss: A float Tensor containing the testing set's loss value.
+            train_op: The training operation of the graph.
+            global_step: The global step of the training process.
+        """        
+
+        global_step = tf.train.get_or_create_global_step()
+
+        tf.logging.info("Loading the MNIST dataset...")
+
+        train_images, train_targets, img_shape, _ = create_dataset(config, split='train', shuffle=True, repeat=True)
+        test_images, test_targets, _, _ = create_dataset(config, split='test', shuffle=True, repeat=True)
+
+        tf.logging.info("Building the computation graph...")
+
+        if config.model == 'gmvae':
+            # Create a gmvae.TrainableGMVAE model object
+            '''model = gmvae.create_gmvae(train_images.get_shape().as_list()[1],
+                                       config.latent_size,
+                                       [config.hidden_size] * config.num_layers,
+                                       mixture_components=config.mixture_components,
+                                       sigma_min=0.0,
+                                       raw_sigma_bias=0.5)'''
+        else:
+            # Create a vae.TrainableVAE model object
+            model = vae.create_vae(train_images.get_shape().as_list()[1],
+                                   config.latent_size,
+                                   [config.hidden_size] * config.num_layers,
+                                   sigma_min=0.0,
+                                   raw_sigma_bias=0.5)
+
+        with tf.name_scope('train'):
+            train_loss = model.run_model(train_images, train_targets, config.batch_size)
+
+        with tf.name_scope('test'):
+            test_loss = model.run_model(test_images, test_targets, config.batch_size)
+
+        opt = tf.train.AdamOptimizer(config.learning_rate)
+        grads = opt.compute_gradients(train_loss, var_list=tf.trainable_variables())
+        train_op = opt.apply_gradients(grads, global_step=global_step)
+
+        with tf.name_scope('image_summaries'):
+            inputs = unflatten(
+                train_images[config.num_samples:], 
+                img_shape, 
+                name='img_summ_input')
+            helpers.image_tile_summary('inputs',
+                tf.cast(inputs, dtype=tf.float32),
+                rows=5,
+                cols=5)
+
+            recon = unflatten(
+                model.reconstruct_images(train_images[config.num_samples:]), 
+                img_shape, 
+                name='img_summ_recon')
+            helpers.image_tile_summary('reconstructions',
+                tf.cast(recon, dtype=tf.float32),
+                rows=5,
+                cols=5)
+
+            samples = unflatten(
+                model.generate_samples(config.num_samples), 
+                img_shape, 
+                name='img_summ_sample')
+            helpers.image_tile_summary('samples',
+                tf.cast(samples, dtype=tf.float32),
+                rows=5,
+                cols=5)
+
+        tf.logging.info("Successfully built the graph!")
+
+        return train_loss, test_loss, train_op, global_step
+
+
+    with tf.Graph().as_default():
+        if config.random_seed: 
+            tf.set_random_seed(config.random_seed)
+
+        with tf.device('/gpu:{}'.format(config.gpu_id)):
+            train_loss, test_loss, train_op, global_step = create_graph()
+
+            # Create session hooks
+            log_hook = create_logging_hook(global_step, train_loss, test_loss, config.summarise_every)
+            early_hook = helpers.EarlyStoppingHook(loss_op=test_loss,
+                                   max_steps=config.early_stop_rounds,
+                                   threshold=config.early_stop_threshold)
+
+            # Set up the configuration for training
+            config_proto = tf.ConfigProto(inter_op_parallelism_threads=1,
+                                          intra_op_parallelism_threads=1)
+            config_proto.gpu_options.allow_growth = True
+            config_proto.gpu_options.per_process_gpu_memory_fraction = 0.3
+            config_proto.log_device_placement = False
+            config_proto.allow_soft_placement = True
+            config_proto.gpu_options.visible_device_list = config.gpu_num
+
+            # Set up log directory for saving checkpoints
+            logdir = '{}/{}/h{}_n{}_z{}'.format(
+                config.logdir, 
+                config.model, 
+                config.hidden_size,
+                config.num_layers, 
+                config.latent_size)
+            if  not tf.io.gfile.exists(logdir):
+                tf.logging.info("Creating log directory at {}".format(logdir))
+                tf.io.gfile.makedirs(logdir)
+
+            with tf.train.MonitoredTrainingSession(
+                config=config_proto,
+                hooks=[log_hook, early_hook],
+                checkpoint_dir=logdir,
+                save_checkpoint_secs=120,
+                save_summaries_steps=config.summarise_every,
+                log_step_count_steps=config.summarise_every) as sess:
+                cur_step = -1
+
+                while not sess.should_stop() and cur_step <= config.max_steps:
+                    _, cur_step = sess.run([train_op, global_step])
+
+
+def run_eval(config):
+    """Runs the evaluation of a latent variable model.
+
+    This method runs only one evaluation over the dataset, writes summaries to
+    disk, and then terminates. It does not loop indefinitely.
+
+    Args:
+        config: A configuration object with config values accessible as properties.
+    """
+
+    def create_graph():
+        """Creates the evaluation graph.
+
+        Returns:
+            sum_loss: A tuple of float Tensors containing the loss value
+                summed across the entire batch.
+            batch_size: An integer Tensor containing the batch size.
+            z_mean: The mean embeddings of "num_samples" input images.
+            labels: The labels associated with a batch of data.
+            global_step: The global step the checkpoint was loaded from.
+        """
+
+        global_step = tf.train.get_or_create_global_step()
+
+        tf.logging.info("Loading the MNIST dataset...")
+
+        images, targets, _, labels = create_dataset(config, split=config.split, shuffle=False, repeat=False)
+
+        if config.model == 'gmvae':
+            # Create a gmvae.TrainableGMVAE model object
+            model = gmvae.create_gmvae(images.get_shape().as_list()[1],
+                                       config.latent_size,
+                                       [config.hidden_size] * config.num_layers,
+                                       mixture_components=config.mixture_components,
+                                       sigma_min=0.0,
+                                       raw_sigma_bias=0.5)
+        else:
+            # Create a vae.TrainableVAE images object
+            model = vae.create_vae(images.get_shape().as_list()[1],
+                                   config.latent_size,
+                                   [config.hidden_size] * config.num_layers,
+                                   sigma_min=0.0,
+                                   raw_sigma_bias=0.5)
+
+
+        # Compute lower bounds on the log likelihood
+        loss = model.run_model(images, targets, config.batch_size)
+        sum_loss = tf.reduce_sum(loss)
+        # In case batches aren't divided evenly across dataset
+        batch_size = tf.shape(images)[0]
+
+        z_mean = model.get_embeddings(images)
+
+        return (sum_loss, batch_size, z_mean, labels, global_step)
+
+
+    def process_over_dataset(loss, batch_size, z, y, sess):
+        """Process the dataset, averaging over the loss.
+
+        Args:
+            loss: Float Tensor containing the loss value evaluated on a single batch.
+            batch_size: Integer Tensor containing the batch size. This can vary if the
+                requested batch_size does not evenly divide the size of the dataset.
+            z: The latent variables to accumulate over the dataset.
+            y: The labels to accumulate over the dataset.
+            sess: A TensorFlow Session object.
+        Returns:
+            avg_loss: A float containing the average loss value, normalised by 
+                the number of examples in the dataset.
+        """
+
+        total_loss = 0.0
+        total_n_elems = 0.0
+        latent_state = []
+        labels = []
+
+        while True:
+            try:
+                outs = sess.run([loss, batch_size, z, y])
+            except tf.errors.OutOfRangeError:
+                break
+
+            total_loss += outs[0]
+            total_n_elems += outs[1]
+            latent_state.extend(np.reshape(outs[2], (-1, config.latent_size)))
+            labels.extend(np.reshape(outs[3], (-1, 1)))
+
+        avg_loss = total_loss / total_n_elems
+
+        return avg_loss, np.array(latent_state), np.array(labels)
+
+
+    def summarise_loss(avg_loss, summary_writer, step):
+        """Creates log-likelihood lower bound summaries and writes them to disk.
+
+        Args:
+            avg_loss: A python float, contains the value of the
+                evaluated loss normalised by the number of examples.
+            summary_writer: A tf.SummaryWriter.
+            step: The current global step.
+        """
+
+        def scalar_summary(name, value):
+            value = tf.Summary.Value(tag=name, simple_value=value)
+            return tf.Summary(value=[value])
+
+
+        per_example_summary = scalar_summary("%s/loss_per_example" % config.split, avg_loss)
+        summary_writer.add_summary(per_example_summary, global_step=step)
+        summary_writer.flush()
+
+
+    def plot_latent(path, step, latent_var, labels, ndim=2):
+        feat_cols = ['index' + str(i) for i in range(latent_var.shape[1])]
+        df = pd.DataFrame(latent_var, columns=feat_cols)
+        df['y'] = labels
+        df['z1-tsne'] = latent_var[:,0]
+        df['z2-tsne'] = latent_var[:,1]
+
+        if ndim == 2:
+            plt.figure(figsize=(16, 10))
+            sns.scatterplot(
+                x='z1-tsne', y='z2-tsne',
+                hue='y',
+                palette=sns.color_palette('hls', config.mixture_components),
+                data=df,
+                legend='full',
+                alpha=0.3)
+        elif ndim == 3:
+            df['z3-tsne'] = latent_var[:,2]
+
+            ax = plt.figure(figsize=(16,10)).gca(projection='3d')
+            ax.scatter(
+                xs=df['z1-tsne'], 
+                ys=df['z2-tsne'], 
+                zs=df['z3-tsne'], 
+                c=df['y'], 
+                cmap='tab10'
+            )
+            ax.set_xlabel("z1-tsne")
+            ax.set_ylabel("z2-tsne")
+            ax.set_zlabel("z3-tsne")
+        else:
+            tf.logging.error("Cannot accommodate that many dimensions!")
+
+        plt.savefig('{}/step_{}_dim_{}'.format(path, step, ndim))
+        plt.show()
+
+
+    with tf.Graph().as_default():
+        if config.random_seed: 
+            tf.set_random_seed(config.random_seed)
+
+        loss, bs, z_mu, y, global_step = create_graph()
+
+        # Set up log directory for loading checkpoints
+        logdir = '{}/{}/h{}_n{}_z{}'.format(
+            config.logdir, 
+            config.model, 
+            config.hidden_size,
+            config.num_layers, 
+            config.latent_size)
+
+        # Set up the summary directory for storing results on split
+        summary_dir = '{}/{}'.format(
+            logdir,
+            config.split)
+        summary_writer = tf.summary.FileWriter(summary_dir, flush_secs=15, max_queue=100)
+
+        saver = tf.train.Saver()
+        with tf.train.SingularMonitoredSession() as sess:
+            helpers.wait_for_checkpoint(saver, sess, logdir)
+            step = sess.run(global_step)
+            tf.logging.info("Model restored from step %d" % step)
+
+            avg_loss, z_mu_out, y_out = process_over_dataset(loss, bs, z_mu, y, sess)
+            summarise_loss(avg_loss, summary_writer, step)
+
+            tf.logging.info("%s loss/example: %f", config.split, avg_loss)
+
+            z_two = reduce_dimensionality(z_mu_out[:config.num_samples])
+            z_three = reduce_dimensionality(z_mu_out[:config.num_samples], dim=3)
+
+            plot_latent(summary_dir, step, z_two, y_out[:config.num_samples])
+            plot_latent(summary_dir, step, z_three, y_out[:config.num_samples], ndim=3)

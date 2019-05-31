@@ -1,0 +1,119 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
+import time
+import os
+
+import tensorflow as tf
+
+
+class EarlyStoppingHook(tf.train.SessionRunHook):
+    """Monitor to request stop when 'loss_op' stops increasing."""
+
+    def __init__(self, loss_op, max_steps=100, threshold=0.001):
+        self._loss_op = loss_op
+        self._max_steps = max_steps
+        self._threshold = threshold
+        self._last_step = -1
+
+        # Records the number of steps for which the loss has been non-increasing
+        self._steps = 0
+        self._prev_loss = None
+
+
+    def before_run(self, run_context):
+        return tf.train.SessionRunArgs(
+            {'global_step': tf.train.get_or_create_global_step(),
+             'current_loss': self._loss_op})
+              
+
+    def after_run(self, run_context, run_values):
+        curr_loss = run_values.results['current_loss']
+        curr_step = run_values.results['global_step']
+        self._steps += 1
+
+        # Guard against the global step going backwards e.g. during recovery
+        if self._last_step == -1 or self._last_step > curr_step:
+            tf.logging.info("EarlyStoppingHook resetting last_step.")
+            self._last_step = curr_step
+            self._steps = 0
+            self._prev_loss = None
+
+            return
+
+        self._last_step = curr_step
+        # If no previous loss or current loss is decreasing as desired
+        if (self._prev_loss is None or curr_loss < 
+            (self._prev_loss - self._prev_loss * self._threshold)):
+            self._prev_loss = curr_loss
+            self._steps = 0
+
+        # If early stopping condition has been met
+        if self._steps >= self._max_steps:
+            tf.logging.info("[Early Stopping Criterion Satisfied]")
+            run_context.request_stop()
+
+
+def restore_checkpoint_if_exists(saver, sess, logdir):
+    """Looks for a checkpoint and restores the session if found.
+
+    Args:
+        saver: A tf.train.Saver for restoring the session.
+        sess: A TensorFlow session.
+        logdir: The directory to look for checkpoints in.
+
+    Returns:
+        True if a checkpoint was found and restored, False otherwise.
+    """
+
+    checkpoint = tf.train.get_checkpoint_state(logdir)
+
+    if checkpoint:
+        checkpoint_name = os.path.basename(checkpoint.model_checkpoint_path)
+        full_checkpoint_path = os.path.join(logdir, checkpoint_name)
+        saver.restore(sess, full_checkpoint_path)
+
+        return True
+
+    return False
+
+
+def wait_for_checkpoint(saver, sess, logdir):
+    """Loops until the session is restored from a checkpoint in logdir.
+
+    Args:
+        saver: A tf.train.Saver for restoring the session.
+        sess: A TensorFlow session.
+        logdir: The directory to look for checkpoints in.
+    """
+
+    while not restore_checkpoint_if_exists(saver, sess, logdir):
+        tf.logging.info("Checkpoint not found in %s, sleeping for 60 seconds." % logdir)
+        time.sleep(60)
+
+
+def pack_images(images, rows, cols):
+    """Helper utility to make a field of images."""
+
+    shape = tf.shape(input=images)
+    width = shape[-3]
+    height = shape[-2]
+    depth = shape[-1]
+
+    images = tf.reshape(images, (-1, width, height, depth))
+    batch = tf.shape(input=images)[0]
+
+    rows = tf.minimum(rows, batch)
+    cols = tf.minimum(batch // rows, cols)
+
+    images = images[:rows * cols]
+    images = tf.reshape(images, (rows, cols, width, height, depth))
+    images = tf.transpose(a=images, perm=[0, 2, 1, 3, 4])
+    images = tf.reshape(images, [1, rows * width, cols * height, depth])
+
+    return images
+
+
+def image_tile_summary(name, tensor, rows=8, cols=8):
+    tf.summary.image(name, pack_images(tensor, rows, cols), max_outputs=1)
