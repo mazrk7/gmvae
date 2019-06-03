@@ -14,7 +14,7 @@ import seaborn as sns
 from sklearn.manifold import TSNE
 
 import helpers
-#import gmvae
+import gmvae
 import vae
 
 
@@ -134,14 +134,22 @@ def run_train(config):
 
         if config.model == 'gmvae':
             # Create a gmvae.TrainableGMVAE model object
-            '''model = gmvae.create_gmvae(train_images.get_shape().as_list()[1],
+            model = gmvae.create_gmvae(train_images.get_shape().as_list()[1],
                                        config.latent_size,
                                        [config.hidden_size] * config.num_layers,
                                        mixture_components=config.mixture_components,
                                        sigma_min=0.0,
-                                       raw_sigma_bias=0.5)'''
+                                       raw_sigma_bias=0.5)
+        elif config.model == 'vae_gmp':
+            # Create a mixture prior vae.TrainableVAE model object
+            model = vae.create_vae(train_images.get_shape().as_list()[1],
+                                   config.latent_size,
+                                   [config.hidden_size] * config.num_layers,
+                                   mixture_components=config.mixture_components,
+                                   sigma_min=0.0,
+                                   raw_sigma_bias=0.5)
         else:
-            # Create a vae.TrainableVAE model object
+            # Create a standard vae.TrainableVAE model object
             model = vae.create_vae(train_images.get_shape().as_list()[1],
                                    config.latent_size,
                                    [config.hidden_size] * config.num_layers,
@@ -255,6 +263,7 @@ def run_eval(config):
                 summed across the entire batch.
             batch_size: An integer Tensor containing the batch size.
             z_mean: The mean embeddings of "num_samples" input images.
+            prior_samples: Samples from the prior.
             labels: The labels associated with a batch of data.
             global_step: The global step the checkpoint was loaded from.
         """
@@ -273,8 +282,16 @@ def run_eval(config):
                                        mixture_components=config.mixture_components,
                                        sigma_min=0.0,
                                        raw_sigma_bias=0.5)
+        elif config.model == 'vae_gmp':
+            # Create a mixture prior vae.TrainableVAE model object
+            model = vae.create_vae(images.get_shape().as_list()[1],
+                                   config.latent_size,
+                                   [config.hidden_size] * config.num_layers,
+                                   mixture_components=config.mixture_components,
+                                   sigma_min=0.0,
+                                   raw_sigma_bias=0.5)
         else:
-            # Create a vae.TrainableVAE images object
+            # Create a standard vae.TrainableVAE model object
             model = vae.create_vae(images.get_shape().as_list()[1],
                                    config.latent_size,
                                    [config.hidden_size] * config.num_layers,
@@ -290,7 +307,9 @@ def run_eval(config):
 
         z_mean = model.get_embeddings(images)
 
-        return (sum_loss, batch_size, z_mean, labels, global_step)
+        prior_samples, _, _ = model.evaluate_prior(config.num_samples)
+
+        return (sum_loss, batch_size, z_mean, prior_samples, labels, global_step)
 
 
     def process_over_dataset(loss, batch_size, z, y, sess):
@@ -306,6 +325,8 @@ def run_eval(config):
         Returns:
             avg_loss: A float containing the average loss value, normalised by 
                 the number of examples in the dataset.
+            latent_state: An np.array of the entire latent space.
+            labels: An np.array of the dataset's labels.
         """
 
         total_loss = 0.0
@@ -386,11 +407,25 @@ def run_eval(config):
         plt.show()
 
 
+    def plot_prior_samples(path, step, samples):
+        # Prior samples plot
+        g = sns.jointplot(
+            x=samples[..., 0],
+            y=samples[..., 1],
+            kind='scatter',
+            stat_func=None,
+            marginal_kws=dict(bins=50))
+        g.set_axis_labels("$x_1$", "$x_2$");
+
+        plt.savefig('{}/step_{}_samples'.format(path, step))
+        plt.show()
+
+
     with tf.Graph().as_default():
         if config.random_seed: 
             tf.set_random_seed(config.random_seed)
 
-        loss, bs, z_mu, y, global_step = create_graph()
+        loss, bs, z_mu, p_z_samples, y, global_step = create_graph()
 
         # Set up log directory for loading checkpoints
         logdir = '{}/{}/h{}_n{}_z{}'.format(
@@ -417,8 +452,15 @@ def run_eval(config):
 
             tf.logging.info("%s loss/example: %f", config.split, avg_loss)
 
+            tf.logging.info("Plotting code samples!")
             z_two = reduce_dimensionality(z_mu_out[:config.num_samples])
-            z_three = reduce_dimensionality(z_mu_out[:config.num_samples], dim=3)
-
             plot_latent(summary_dir, step, z_two, y_out[:config.num_samples])
+            z_three = reduce_dimensionality(z_mu_out[:config.num_samples], dim=3)
             plot_latent(summary_dir, step, z_three, y_out[:config.num_samples], ndim=3)
+
+            samples = sess.run(p_z_samples)
+            samples_two = reduce_dimensionality(samples)
+
+            tf.logging.info("Plotting prior samples!")
+            plot_prior_samples(summary_dir, step, samples_two)
+

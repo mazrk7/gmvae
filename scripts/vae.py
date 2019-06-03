@@ -35,8 +35,7 @@ class VAE(object):
         """Getter for the prior distribution p(z).
 
         Returns:
-            p(z): A multivariate Gaussian distribution with shape 
-                [batch_size, latent_size].
+            p(z): A distribution with shape [batch_size, latent_size].
         """
 
         return self._prior
@@ -80,6 +79,7 @@ class TrainableVAE(VAE):
                  prior,
                  decoder,
                  encoder,
+                 mix_components=1,
                  random_seed=None):
         """Create a trainable VAE.
 
@@ -90,10 +90,12 @@ class TrainableVAE(VAE):
                 and return a subclass of tf.distributions.Distribution that 
                 can be used to evaluate the log_prob of the targets.
             encoder: A callable that implements the inference q(z | x).
+            mix_components: The number of components in the mixture prior.
             random_seed: The seed for the random ops.
         """
 
         super(TrainableVAE, self).__init__(prior, decoder, encoder)
+        self.mix_components = mix_components
         self.random_seed = random_seed
 
 
@@ -126,25 +128,22 @@ class TrainableVAE(VAE):
     def get_embeddings(self, inputs):
         """Generate mean embeddings of the input."""
 
-        inputs = tf.cast(inputs, dtype=tf.float32)
-
-        q_z = self.encoder(inputs)
+        q_z = self.encoder(tf.cast(inputs, dtype=tf.float32))
         z = q_z.mean()
 
         return tf.cast(z, dtype=tf.float32)
 
 
-    def get_prior_stats(self, num_samples):
-        """Evaluate the prior statistics."""
+    def evaluate_prior(self, num_samples):
+        """Evaluate the prior by returning samples and statistics."""
 
         p_z = self.prior()
 
         z = p_z.sample(num_samples, seed=self.random_seed)
         p_z_mu = p_z.mean()
-        p_z_mode = p_z.mode()
-        p_z_variance = p_z.variance()
+        p_z_var = p_z.variance()
 
-        return tf.cast(z, dtype=tf.float32), p_z_mu, p_z_mode, p_z_variance
+        return tf.cast(z, dtype=tf.float32), p_z_mu, p_z_var
 
 
     def run_model(self, images, targets, batch_size):
@@ -195,6 +194,7 @@ def create_vae(
     data_size,
     latent_size,
     fcnet_hidden_sizes,
+    mixture_components=1,
     hidden_activation_fn=tf.nn.relu,
     sigma_min=0.001,
     raw_sigma_bias=0.25,
@@ -207,6 +207,8 @@ def create_vae(
         fcnet_hidden_sizes: A list of python integers, the size of the hidden
             layers of the fully connected networks that parameterise the conditional
             distributions of the VAE.
+        mixture_components: The number of components in the mixture prior distribution.
+            Defaults to 1 if not learning the prior parameters and using a single Gaussian.
         hidden_activation_fn: The activation operation applied to intermediate 
             layers, and optionally to the output of the final layer.
         sigma_min: The minimum value that the standard deviation of the
@@ -220,8 +222,23 @@ def create_vae(
         model: A TrainableVAE object.
     """
 
-    # The prior, a multivariate Gaussian implementing p(z)
-    prior = tfp.distributions.MultivariateNormalDiag(
+    if mixture_components > 1:
+        # A Gaussian mixture prior where parameters are learnt
+        loc = tf.get_variable(
+            name='loc', shape=[mixture_components, latent_size])
+        raw_scale_diag = tf.get_variable(
+            name='raw_scale_diag', shape=[mixture_components, latent_size])
+        mixture_logits = tf.get_variable(
+            name='mixture_logits', shape=[mixture_components])
+
+        prior = tfp.distributions.MixtureSameFamily(
+            components_distribution=tfp.distributions.MultivariateNormalDiag(
+                loc=loc, scale_diag=tf.nn.softplus(raw_scale_diag)),
+            mixture_distribution=tfp.distributions.Categorical(logits=mixture_logits),
+            name='prior')
+    else:
+        # The prior, a multivariate Gaussian implementing p(z)
+        prior = tfp.distributions.MultivariateNormalDiag(
             loc=tf.zeros([latent_size]),
             scale_identity_multiplier=1.0,
             name='prior')
@@ -243,4 +260,4 @@ def create_vae(
         raw_sigma_bias=raw_sigma_bias,
         name='encoder')
 
-    return TrainableVAE(prior, decoder, encoder, random_seed=random_seed)
+    return TrainableVAE(prior, decoder, encoder, mixture_components, random_seed=random_seed)
