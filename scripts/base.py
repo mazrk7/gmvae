@@ -74,13 +74,13 @@ class GaussianMixture(object):
 
         mu, sigma = self.condition(args, **kwargs)
 
-        if 'cat_logits' not in kwargs:
-            tf.logging.error("No categorical variables provided: %s", kwargs.get('cat_logits'))
+        if 'logits' not in kwargs:
+            tf.logging.error("No logits provided: %s", kwargs.get('logits'))
             return None
 
         return tfd.MixtureSameFamily(
             components_distribution=tfd.MultivariateNormalDiag(loc=mu, scale_diag=sigma),
-            mixture_distribution=tfd.Categorical(logits=kwargs.get('cat_logits')),
+            mixture_distribution=tfd.Categorical(logits=kwargs.get('logits')),
             name=self.name)
 
 
@@ -176,7 +176,7 @@ class ConditionalBernoulli(object):
 
 
     def condition(self, tensor_list, **unused_kwargs):
-        """Computes the parameters of a Bernoulli distribution based on the inputs."""
+        """Computes the logits of a Bernoulli distribution."""
 
         inputs = tf.concat(tensor_list, axis=1)
         logits = self.fcnet(inputs)
@@ -196,11 +196,11 @@ class ConditionalBernoulli(object):
 
 
 class ConditionalCategorical(object):
-    """A Categorical distribution conditioned on Tensor inputs via a dense network."""
+    """A OneHotCategorical distribution conditioned on Tensor inputs via a dense network."""
 
     def __init__(self, size, hidden_layer_sizes, initialisers=DEFAULT_INITIALISERS, 
                  hidden_activation_fn=tf.nn.relu, name='conditional_categorical'):
-        """Creates a conditional Categorical distribution.
+        """Creates a conditional OneHotCategorical distribution.
 
         Args:
             size: The dimension of the random variable.
@@ -228,7 +228,7 @@ class ConditionalCategorical(object):
 
 
     def condition(self, tensor_list, **unused_kwargs):
-        """Computes the parameters of a Categorical distribution based on the inputs."""
+        """Computes the logits of a OneHotCategorical distribution."""
 
         inputs = tf.concat(tensor_list, axis=1)
         logits = self.fcnet(inputs)
@@ -237,8 +237,8 @@ class ConditionalCategorical(object):
 
 
     def __call__(self, *args, **kwargs):
-        """Creates a Categorical distribution conditioned on the inputs."""
+        """Creates a OneHotCategorical distribution conditioned on the inputs."""
 
         logits = self.condition(args, **kwargs)
         
-        return tfd.Categorical(logits=logits, name=self.name)
+        return tfd.OneHotCategorical(logits=logits, name=self.name)

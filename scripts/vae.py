@@ -65,15 +65,13 @@ class VAE(object):
             q(z | x): A distribution with shape [batch_size, latent_size].
         """
         
+        x = tf.cast(x, dtype=tf.float32)
+
         return self._encoder(x)
 
 
 class TrainableVAE(VAE):
-    """A VAE subclass with methods for training and evaluation.
-
-    During training, the latent state z is sampled and the
-    reparameterization trick is used to provide low-variance gradients.
-    """
+    """A VAE subclass with methods for training and evaluation."""
 
     def __init__(self,
                  prior,
@@ -100,50 +98,49 @@ class TrainableVAE(VAE):
 
 
     def reconstruct_images(self, images):
-        """Generate mean reconstructions of 'images' from the model."""
-
-        images = tf.cast(images, dtype=tf.float32)
+        """Generate reconstructions of 'images' from the model."""
 
         q_z = self.encoder(images)
         z = q_z.sample(seed=self.random_seed)
 
         p_x_given_z = self.decoder(z)
-        recon = p_x_given_z.mean()
+        recon = p_x_given_z.mean(name='reconstructions')
 
-        return tf.cast(recon, dtype=tf.float32)
+        return recon
+
+
+    def generate_sample_images(self, num_samples, z=None):
+        """Generates mean sample images from the latent space.
+
+        Can provide latent variable 'z' to generate data for
+        this point in the latent space. Else draw from prior.
+        """
+
+        if z is None:
+            z = self.generate_samples(num_samples)
+
+        p_x_given_z = self.decoder(z)
+        sample_images = p_x_given_z.mean(name='sample_images')
+
+        return sample_images
+
+
+    def transform(self, inputs):
+        """Transform 'inputs' to yield mean latent code."""
+
+        q_z = self.encoder(inputs)
+        z = q_z.mean(name='code')
+
+        return z
 
 
     def generate_samples(self, num_samples):
-        """Generates mean sample output images from the model."""
+        """Generate 'num_samples' samples from the model prior."""
 
         p_z = self.prior()
-        z = p_z.sample(num_samples, seed=self.random_seed)
+        z = p_z.sample(num_samples, seed=self.random_seed, name='samples')
 
-        p_x_given_z = self.decoder(z)
-        samples = p_x_given_z.mean()
-
-        return tf.cast(samples, dtype=tf.float32)
-
-
-    def get_embeddings(self, inputs):
-        """Generate mean embeddings of the input."""
-
-        q_z = self.encoder(tf.cast(inputs, dtype=tf.float32))
-        z = q_z.mean()
-
-        return tf.cast(z, dtype=tf.float32)
-
-
-    def evaluate_prior(self, num_samples):
-        """Evaluate the prior by returning samples and statistics."""
-
-        p_z = self.prior()
-
-        z = p_z.sample(num_samples, seed=self.random_seed)
-        p_z_mu = p_z.mean()
-        p_z_var = p_z.variance()
-
-        return tf.cast(z, dtype=tf.float32), p_z_mu, p_z_var
+        return z
 
 
     def run_model(self, images, targets, batch_size):
@@ -154,17 +151,13 @@ class TrainableVAE(VAE):
                 and with Tensor shape [batch_size, data_size].
             targets: A batch of target images generated from a dataset iterator
                 and with Tensor shape [batch_size, data_size].
-            batch_size: Batch size.
+            batch_size: Batch size. Unused here.
 
         Returns:
             loss: A float loss Tensor.
         """
 
-        images = tf.cast(images, dtype=tf.float32)
-        targets = tf.cast(targets, dtype=tf.float32)
-
         # Prior with Gaussian distribution p(z)
-        # Use Independent to reshape for batch dims
         p_z = self.prior()
 
         # Encoder accept images x implement q(z | x)
@@ -193,8 +186,8 @@ class TrainableVAE(VAE):
 def create_vae(
     data_size,
     latent_size,
-    fcnet_hidden_sizes,
     mixture_components=1,
+    fcnet_hidden_sizes=None,
     hidden_activation_fn=tf.nn.relu,
     sigma_min=0.001,
     raw_sigma_bias=0.25,
@@ -204,11 +197,12 @@ def create_vae(
     Args:
         data_size: The dimension of the vector that makes up the flattened images.
         latent_size: The size of the stochastic latent state of the GMVAE.
-        fcnet_hidden_sizes: A list of python integers, the size of the hidden
-            layers of the fully connected networks that parameterise the conditional
-            distributions of the VAE.
         mixture_components: The number of components in the mixture prior distribution.
             Defaults to 1 if not learning the prior parameters and using a single Gaussian.
+        fcnet_hidden_sizes: A list of python integers, the size of the hidden
+            layers of the fully connected networks that parameterise the conditional
+            distributions of the VAE. If None, then it defaults to one hidden
+            layer of size latent_size.
         hidden_activation_fn: The activation operation applied to intermediate 
             layers, and optionally to the output of the final layer.
         sigma_min: The minimum value that the standard deviation of the
@@ -221,6 +215,9 @@ def create_vae(
     Returns:
         model: A TrainableVAE object.
     """
+
+    if fcnet_hidden_sizes is None:
+        fcnet_hidden_sizes = [latent_size]
 
     if mixture_components > 1:
         # A Gaussian mixture prior where parameters are learnt

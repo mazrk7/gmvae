@@ -66,10 +66,10 @@ def create_dataset(config, split, shuffle, repeat):
         repeat: If true, repeat the dataset endlessly.
 
     Returns:
-        images: A batch of image sequences represented as a dense Tensor of 
-            shape [batch_size, IMAGE_SIZE*IMAGE_SIZE*1].
-        targets: A batch of target sequences represented as a dense Tensor of
-            shape [batch_size, IMAGE_SIZE*IMAGE_SIZE*1].
+        images: A batch of image sequences represented as a dense Tensor 
+            of shape [batch_size, IMAGE_SIZE*IMAGE_SIZE*1].
+        targets: A batch of target sequences represented as a dense Tensor 
+            of shape [batch_size, IMAGE_SIZE*IMAGE_SIZE*1].
         image_shape: A shape Tensor for the images contained in the dataset.
         labels: A batch of integer labels, for use in evaluation of clustering.
     """
@@ -136,23 +136,23 @@ def run_train(config):
             # Create a gmvae.TrainableGMVAE model object
             model = gmvae.create_gmvae(train_images.get_shape().as_list()[1],
                                        config.latent_size,
-                                       [config.hidden_size] * config.num_layers,
                                        mixture_components=config.mixture_components,
+                                       fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
                                        sigma_min=0.0,
                                        raw_sigma_bias=0.5)
         elif config.model == 'vae_gmp':
             # Create a mixture prior vae.TrainableVAE model object
             model = vae.create_vae(train_images.get_shape().as_list()[1],
                                    config.latent_size,
-                                   [config.hidden_size] * config.num_layers,
                                    mixture_components=config.mixture_components,
+                                   fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
                                    sigma_min=0.0,
                                    raw_sigma_bias=0.5)
         else:
             # Create a standard vae.TrainableVAE model object
             model = vae.create_vae(train_images.get_shape().as_list()[1],
                                    config.latent_size,
-                                   [config.hidden_size] * config.num_layers,
+                                   fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
                                    sigma_min=0.0,
                                    raw_sigma_bias=0.5)
 
@@ -169,8 +169,7 @@ def run_train(config):
         with tf.name_scope('image_summaries'):
             inputs = unflatten(
                 train_images[config.num_samples:], 
-                img_shape, 
-                name='img_summ_input')
+                img_shape)
             helpers.image_tile_summary('inputs',
                 tf.cast(inputs, dtype=tf.float32),
                 rows=5,
@@ -178,17 +177,15 @@ def run_train(config):
 
             recon = unflatten(
                 model.reconstruct_images(train_images[config.num_samples:]), 
-                img_shape, 
-                name='img_summ_recon')
+                img_shape)
             helpers.image_tile_summary('reconstructions',
                 tf.cast(recon, dtype=tf.float32),
                 rows=5,
                 cols=5)
 
             samples = unflatten(
-                model.generate_samples(config.num_samples), 
-                img_shape, 
-                name='img_summ_sample')
+                model.generate_sample_images(config.num_samples), 
+                img_shape)
             helpers.image_tile_summary('samples',
                 tf.cast(samples, dtype=tf.float32),
                 rows=5,
@@ -262,8 +259,9 @@ def run_eval(config):
             sum_loss: A tuple of float Tensors containing the loss value
                 summed across the entire batch.
             batch_size: An integer Tensor containing the batch size.
-            z_mean: The mean embeddings of "num_samples" input images.
-            prior_samples: Samples from the prior.
+            z: The mean code resulting from transforming input images.
+            samples: Samples from the model prior.
+            sample_images: Sampled images from the model prior.
             labels: The labels associated with a batch of data.
             global_step: The global step the checkpoint was loaded from.
         """
@@ -272,29 +270,29 @@ def run_eval(config):
 
         tf.logging.info("Loading the MNIST dataset...")
 
-        images, targets, _, labels = create_dataset(config, split=config.split, shuffle=False, repeat=False)
+        images, targets, img_shape, labels = create_dataset(config, split=config.split, shuffle=False, repeat=False)
 
         if config.model == 'gmvae':
             # Create a gmvae.TrainableGMVAE model object
             model = gmvae.create_gmvae(images.get_shape().as_list()[1],
                                        config.latent_size,
-                                       [config.hidden_size] * config.num_layers,
                                        mixture_components=config.mixture_components,
+                                       fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
                                        sigma_min=0.0,
                                        raw_sigma_bias=0.5)
         elif config.model == 'vae_gmp':
             # Create a mixture prior vae.TrainableVAE model object
             model = vae.create_vae(images.get_shape().as_list()[1],
                                    config.latent_size,
-                                   [config.hidden_size] * config.num_layers,
                                    mixture_components=config.mixture_components,
+                                   fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
                                    sigma_min=0.0,
                                    raw_sigma_bias=0.5)
         else:
             # Create a standard vae.TrainableVAE model object
             model = vae.create_vae(images.get_shape().as_list()[1],
                                    config.latent_size,
-                                   [config.hidden_size] * config.num_layers,
+                                   fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
                                    sigma_min=0.0,
                                    raw_sigma_bias=0.5)
 
@@ -305,11 +303,20 @@ def run_eval(config):
         # In case batches aren't divided evenly across dataset
         batch_size = tf.shape(images)[0]
 
-        z_mean = model.get_embeddings(images)
+        z = model.transform(images)
+        samples = model.generate_samples(config.num_samples)
+        sample_images = unflatten(
+            model.generate_sample_images(config.num_samples, samples), 
+            img_shape)
 
-        prior_samples, _, _ = model.evaluate_prior(config.num_samples)
+        if config.model == 'gmvae':
+            samples_y = model.generate_samples(config.num_samples, prior='y')
+            sample_images_y = unflatten(
+                model.generate_sample_images(config.num_samples, samples_y), 
+                img_shape)
+            sample_images = tf.stack((sample_images, sample_images_y), axis=0)
 
-        return (sum_loss, batch_size, z_mean, prior_samples, labels, global_step)
+        return (sum_loss, batch_size, z, samples, sample_images, labels, global_step)
 
 
     def process_over_dataset(loss, batch_size, z, y, sess):
@@ -421,11 +428,26 @@ def run_eval(config):
         plt.show()
 
 
+    def display_images(path, step, images, name='sample', n=10):
+        plt.ioff()
+        fig, axs = plt.subplots(n, n, figsize=(10, 10))
+
+        for i in range(n):
+            for j in range(n):
+                axs[i, j].imshow(images[i*n+j].squeeze(), interpolation='none', cmap='gray')
+                axs[i, j].axis('off')
+                plt.subplots_adjust(wspace=0, hspace=0)
+
+        plt.savefig('{}/step_{}_{}_images'.format(path, step, name))
+        plt.show()
+        plt.ion()
+
+
     with tf.Graph().as_default():
         if config.random_seed: 
             tf.set_random_seed(config.random_seed)
 
-        loss, bs, z_mu, p_z_samples, y, global_step = create_graph()
+        loss, bs, z, samples, images, y, global_step = create_graph()
 
         # Set up log directory for loading checkpoints
         logdir = '{}/{}/h{}_n{}_z{}'.format(
@@ -447,20 +469,27 @@ def run_eval(config):
             step = sess.run(global_step)
             tf.logging.info("Model restored from step %d" % step)
 
-            avg_loss, z_mu_out, y_out = process_over_dataset(loss, bs, z_mu, y, sess)
+            avg_loss, z_out, y_out = process_over_dataset(loss, bs, z, y, sess)
             summarise_loss(avg_loss, summary_writer, step)
 
             tf.logging.info("%s loss/example: %f", config.split, avg_loss)
 
-            tf.logging.info("Plotting code samples!")
-            z_two = reduce_dimensionality(z_mu_out[:config.num_samples])
+            tf.logging.info("Plotting latent code!")
+            z_two = reduce_dimensionality(z_out[:config.num_samples])
             plot_latent(summary_dir, step, z_two, y_out[:config.num_samples])
-            z_three = reduce_dimensionality(z_mu_out[:config.num_samples], dim=3)
+            z_three = reduce_dimensionality(z_out[:config.num_samples], dim=3)
             plot_latent(summary_dir, step, z_three, y_out[:config.num_samples], ndim=3)
 
-            samples = sess.run(p_z_samples)
-            samples_two = reduce_dimensionality(samples)
+            samples_out, images_out = sess.run([samples, images])
+            samples_two = reduce_dimensionality(samples_out)
 
             tf.logging.info("Plotting prior samples!")
             plot_prior_samples(summary_dir, step, samples_two)
+
+            if config.model == 'gmvae':
+                display_images(summary_dir, step, images_out[0])
+                display_images(summary_dir, step, images_out[1], name='sample_y')
+            else:
+                display_images(summary_dir, step, images_out)
+
 
