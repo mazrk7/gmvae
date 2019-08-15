@@ -157,10 +157,10 @@ def run_train(config):
                                    raw_sigma_bias=0.5)
 
         with tf.name_scope('train'):
-            train_loss = model.run_model(train_images, train_targets, config.batch_size)
+            train_loss = model.run_model(train_images, train_targets)
 
         with tf.name_scope('test'):
-            test_loss = model.run_model(test_images, test_targets, config.batch_size)
+            test_loss = model.run_model(test_images, test_targets)
 
         opt = tf.train.AdamOptimizer(config.learning_rate)
         grads = opt.compute_gradients(train_loss, var_list=tf.trainable_variables())
@@ -298,7 +298,7 @@ def run_eval(config):
 
 
         # Compute lower bounds on the log likelihood
-        loss = model.run_model(images, targets, config.batch_size)
+        loss = model.run_model(images, targets)
         sum_loss = tf.reduce_sum(loss)
         # In case batches aren't divided evenly across dataset
         batch_size = tf.shape(images)[0]
@@ -477,8 +477,8 @@ def run_eval(config):
             tf.logging.info("Plotting latent code!")
             z_two = reduce_dimensionality(z_out[:config.num_samples])
             plot_latent(summary_dir, step, z_two, y_out[:config.num_samples])
-            z_three = reduce_dimensionality(z_out[:config.num_samples], dim=3)
-            plot_latent(summary_dir, step, z_three, y_out[:config.num_samples], ndim=3)
+            #z_three = reduce_dimensionality(z_out[:config.num_samples], dim=3)
+            #plot_latent(summary_dir, step, z_three, y_out[:config.num_samples], ndim=3)
 
             samples_out, images_out = sess.run([samples, images])
             samples_two = reduce_dimensionality(samples_out)

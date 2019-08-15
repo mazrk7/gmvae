@@ -143,7 +143,7 @@ class TrainableVAE(VAE):
         return z
 
 
-    def run_model(self, images, targets, batch_size):
+    def run_model(self, images, targets):
         """Runs the model and computes weights for a batch of images and targets.
 
         Args:
@@ -151,7 +151,6 @@ class TrainableVAE(VAE):
                 and with Tensor shape [batch_size, data_size].
             targets: A batch of target images generated from a dataset iterator
                 and with Tensor shape [batch_size, data_size].
-            batch_size: Batch size. Unused here.
 
         Returns:
             loss: A float loss Tensor.

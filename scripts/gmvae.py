@@ -212,7 +212,7 @@ class TrainableGMVAE(GMVAE):
         return z
 
 
-    def run_model(self, images, targets, batch_size):
+    def run_model(self, images, targets):
         """Runs the model and computes weights for a batch of images and targets.
 
         Args:
@@ -220,7 +220,6 @@ class TrainableGMVAE(GMVAE):
                 and with Tensor shape [batch_size, data_size].
             targets: A batch of target images generated from a dataset iterator
                 and with Tensor shape [batch_size, data_size].
-            batch_size: Batch size.
 
         Returns:
             loss: A float loss Tensor.
@@ -251,13 +250,12 @@ class TrainableGMVAE(GMVAE):
         log_q_z = q_z.log_prob(z)
         tf.summary.scalar('latent_loss', tf.reduce_mean(log_p_z_given_y - log_q_z))
         
-        # Latent loss between approximate posterior and prior for y
-        log_p_y = p_y.log_prob(y)
+        # Conditional entropy loss
         log_q_y = q_y.log_prob(y)     
-        tf.summary.scalar('cond_entropy', tf.reduce_mean(q_y.entropy()))
+        tf.summary.scalar('cond_entropy', -tf.reduce_mean(log_q_y))
 
         # Need to maximise the ELBO with respect to these weights:
-        loss = -tf.reduce_mean(log_p_x_given_z + log_p_z_given_y - log_q_z + log_p_y - log_q_y)
+        loss = -tf.reduce_mean(log_p_x_given_z + log_p_z_given_y - log_q_z - log_q_y)
         tf.summary.scalar('elbo', -loss)
 
         return loss
