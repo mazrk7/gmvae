@@ -251,11 +251,12 @@ class TrainableGMVAE(GMVAE):
         tf.summary.scalar('latent_loss', tf.reduce_mean(log_p_z_given_y - log_q_z))
         
         # Conditional entropy loss
+        log_p_y = p_y.log_prob(y)     
         log_q_y = q_y.log_prob(y)     
         tf.summary.scalar('cond_entropy', -tf.reduce_mean(log_q_y))
 
         # Need to maximise the ELBO with respect to these weights:
-        loss = -tf.reduce_mean(log_p_x_given_z + log_p_z_given_y - log_q_z - log_q_y)
+        loss = -tf.reduce_mean(log_p_x_given_z + log_p_z_given_y - log_q_z + log_p_y - log_q_y)
         tf.summary.scalar('elbo', -loss)
 
         return loss
