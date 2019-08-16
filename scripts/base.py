@@ -74,13 +74,9 @@ class GaussianMixture(object):
 
         mu, sigma = self.condition(args, **kwargs)
 
-        if 'logits' not in kwargs:
-            tf.logging.error("No logits provided: %s", kwargs.get('logits'))
-            return None
-
         return tfd.MixtureSameFamily(
             components_distribution=tfd.MultivariateNormalDiag(loc=mu, scale_diag=sigma),
-            mixture_distribution=tfd.Categorical(logits=kwargs.get('logits')),
+            mixture_distribution=tfd.Categorical(tf.zeros([self.mix_components])),
             name=self.name)
 
 
@@ -179,9 +175,8 @@ class ConditionalBernoulli(object):
         """Computes the logits of a Bernoulli distribution."""
 
         inputs = tf.concat(tensor_list, axis=1)
-        logits = self.fcnet(inputs)
         
-        return logits
+        return self.fcnet(inputs)
 
 
     def __call__(self, *args, **kwargs):
@@ -231,9 +226,8 @@ class ConditionalCategorical(object):
         """Computes the logits of a OneHotCategorical distribution."""
 
         inputs = tf.concat(tensor_list, axis=1)
-        logits = self.fcnet(inputs)
         
-        return logits
+        return self.fcnet(inputs)
 
 
     def __call__(self, *args, **kwargs):

@@ -12,7 +12,6 @@ class GMVAE(object):
     """Implementation of a Gaussian Mixture Variational Autoencoder (GMVAE)."""
 
     def __init__(self,
-                 prior_y,
                  prior_gmm,
                  decoder,
                  encoder_y,
@@ -20,7 +19,6 @@ class GMVAE(object):
         """Create a GMVAE.
 
         Args:
-            prior_y: A tf.distributions.Distribution that implements p(y).
             prior_gmm: A callable that implements the prior distribution p(z | y)
                 Must accept as argument the y discrete variable and return
                 a tf.distributions.MixtureSameFamily distribution.
@@ -32,35 +30,23 @@ class GMVAE(object):
             encoder_mvn: A callable that implements the inference q(z | x, y).
         """
 
-        self._prior_y = prior_y
         self._prior_gmm = prior_gmm
         self._decoder = decoder
         self._encoder_y = encoder_y
         self._encoder_mvn = encoder_mvn
 
 
-    def prior_y(self):
-        """Getter for the prior distribution p(y).
-
-        Returns:
-            p(y): A distribution with shape [batch_size, mixture_components].
-        """
-
-        return self._prior_y
-
-
-    def prior_gmm(self, y, logits):
+    def prior_gmm(self, y):
         """Computes the GMM prior distribution p(z | y).
 
         Args:
             y: The discrete intermediate variable y.
-            logits: Selection distribution for mixture.
 
         Returns:
             p(z | y): A GMM distribution with shape [batch_size, latent_size].
         """
 
-        return self._prior_gmm(y, logits=logits)
+        return self._prior_gmm(y)
 
 
     def decoder(self, z):
@@ -113,7 +99,6 @@ class TrainableGMVAE(GMVAE):
 
     def __init__(self,
                  mix_components,
-                 prior_y,
                  prior_gmm,
                  decoder,
                  encoder_y,
@@ -123,7 +108,6 @@ class TrainableGMVAE(GMVAE):
 
         Args:
             mix_components: The number of mixture components.
-            prior_y: A tf.distributions.Distribution that implements p(y).
             prior_gmm: A callable that implements the prior distribution p(z | y)
                 Must accept as argument the y discrete variable and return
                 a tf.distributions.MixtureSameFamily distribution.
@@ -137,7 +121,7 @@ class TrainableGMVAE(GMVAE):
         """
 
         super(TrainableGMVAE, self).__init__(
-            prior_y, prior_gmm, decoder,
+            prior_gmm, decoder,
             encoder_y, encoder_mvn)
         self.mix_components = mix_components
         self.random_seed = random_seed
@@ -189,22 +173,22 @@ class TrainableGMVAE(GMVAE):
     def generate_samples(self, num_samples, prior='gmm'):
         """Generate 'num_samples' samples from the model's 'prior'."""
 
-        p_y = self.prior_y()
-
         if prior == 'gmm':
             # Setting 'y' to zero
             zero_input = tf.expand_dims(
                 tf.zeros([self.mix_components]),
                 axis=0, 
                 name='zero_y')
-            p_z_given_y = self.prior_gmm(zero_input, p_y.logits)
+            p_z_given_y = self.prior_gmm(zero_input)
             # Sampling from GMM rather than p(y)
-            z = p_z_given_y.sample(num_samples, seed=self.random_seed, name='samples')
+            z = p_z_given_y.sample(num_samples, seed=self.random_seed, name='samples_gmm')
             # Squeeze out artificial extra dimension
             z = tf.squeeze(z)
         elif prior == 'y':
-            y = tf.cast(p_y.sample(num_samples, seed=self.random_seed), dtype=tf.float32, name='samples_y')
-            p_z_given_y = self.prior_gmm(y, p_y.logits)        
+            uniform = tfp.distributions.OneHotCategorical(logits=tf.zeros([self.mix_components]))
+            y = tf.cast(uniform.sample(num_samples, seed=self.random_seed), dtype=tf.float32, name='samples_y')
+
+            p_z_given_y = self.prior_gmm(y)        
             z = p_z_given_y.sample(seed=self.random_seed)
         else:
             tf.logging.error("No prior by that name: %s", prior)
@@ -225,15 +209,14 @@ class TrainableGMVAE(GMVAE):
             loss: A float loss Tensor.
         """
 
-        # Prior p(y) with uniform distribution 
-        p_y = self.prior_y()
         # Encoder accepts images x and implements q(y | x)
         q_y = self.encoder_y(images)
         y = tf.cast(q_y.sample(seed=self.random_seed), dtype=tf.float32)
 
         # Prior accepts y as input and implements p(z | y)
-        # One-hot vector sampled from uniform distribution, p(y) logits
-        p_z_given_y = self.prior_gmm(y, p_y.logits)
+        # One-hot vector sampled from proposal distribution q(y | x)
+        p_z_given_y = self.prior_gmm(y)
+
         # Encoder accept images x and y as inputs to implement q(z | x, y)
         q_z = self.encoder_mvn(images, y)
         z = q_z.sample(seed=self.random_seed)
@@ -251,12 +234,11 @@ class TrainableGMVAE(GMVAE):
         tf.summary.scalar('latent_loss', tf.reduce_mean(log_p_z_given_y - log_q_z))
         
         # Conditional entropy loss
-        log_p_y = p_y.log_prob(y)     
-        log_q_y = q_y.log_prob(y)     
-        tf.summary.scalar('cond_entropy', -tf.reduce_mean(log_q_y))
+        nent_loss = q_y.log_prob(y)
+        tf.summary.scalar('cond_entropy', -tf.reduce_mean(nent_loss))
 
         # Need to maximise the ELBO with respect to these weights:
-        loss = -tf.reduce_mean(log_p_x_given_z + log_p_z_given_y - log_q_z + log_p_y - log_q_y)
+        loss = -tf.reduce_mean(log_p_x_given_z + log_p_z_given_y - log_q_z - nent_loss)
         tf.summary.scalar('elbo', -loss)
 
         return loss
@@ -297,10 +279,6 @@ def create_gmvae(
     if fcnet_hidden_sizes is None:
         fcnet_hidden_sizes = [latent_size]
 
-    # Prior p(y) is a uniform distribution
-    prior_y = tfp.distributions.OneHotCategorical(
-        logits=tf.zeros([mixture_components]),
-        name='prior_y')
     # Prior p(z | y) is a learned mixture of Gaussians, where mu and
     # sigma are output from a fully connected network conditioned on y
     prior_gmm = base.GaussianMixture(
@@ -335,6 +313,6 @@ def create_gmvae(
         raw_sigma_bias=raw_sigma_bias,
         name='encoder_mvn')
 
-    return TrainableGMVAE(mixture_components, prior_y, prior_gmm,
+    return TrainableGMVAE(mixture_components, prior_gmm,
                           decoder, encoder_y, encoder_mvn,
                           random_seed=random_seed)
