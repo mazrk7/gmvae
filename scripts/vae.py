@@ -171,7 +171,7 @@ class TrainableVAE(VAE):
 
         log_p_z = p_z.log_prob(z)
         log_q_z = q_z.log_prob(z)
-        tf.summary.scalar('kl_div_scalar', tf.reduce_mean(log_p_z - log_q_z))
+        tf.summary.scalar('latent_loss', tf.reduce_mean(log_p_z - log_q_z))
         
         # Need to maximise the ELBO with respect to these weights:
         # - Generation network log_p_x_given_z --> Reconstruction loss
