@@ -15,6 +15,7 @@ from sklearn.manifold import TSNE
 
 import helpers
 import gmvae
+import gmvae_alt
 import vae
 
 
@@ -140,6 +141,14 @@ def run_train(config):
                                        fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
                                        sigma_min=0.0,
                                        raw_sigma_bias=0.5)
+        elif config.model == 'gmvae_alt':
+            # Create a gmvae.TrainableGMVAE model object in an alternative implementation
+            model = gmvae_alt.create_gmvae(train_images.get_shape().as_list()[1],
+                                           config.latent_size,
+                                           mixture_components=config.mixture_components,
+                                           fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
+                                           sigma_min=0.0,
+                                           raw_sigma_bias=0.5)
         elif config.model == 'vae_gmp':
             # Create a mixture prior vae.TrainableVAE model object
             model = vae.create_vae(train_images.get_shape().as_list()[1],
@@ -280,6 +289,14 @@ def run_eval(config):
                                        fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
                                        sigma_min=0.0,
                                        raw_sigma_bias=0.5)
+        elif config.model == 'gmvae_alt':
+            # Create a gmvae.TrainableGMVAE model object in an alternative implementation
+            model = gmvae_alt.create_gmvae(images.get_shape().as_list()[1],
+                                           config.latent_size,
+                                           mixture_components=config.mixture_components,
+                                           fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
+                                           sigma_min=0.0,
+                                           raw_sigma_bias=0.5)
         elif config.model == 'vae_gmp':
             # Create a mixture prior vae.TrainableVAE model object
             model = vae.create_vae(images.get_shape().as_list()[1],
@@ -309,7 +326,7 @@ def run_eval(config):
             model.generate_sample_images(config.num_samples, samples), 
             img_shape)
 
-        if config.model == 'gmvae':
+        if config.model == 'gmvae' or config.model == 'gmvae_alt':
             samples_y = model.generate_samples(config.num_samples, prior='y')
             sample_images_y = unflatten(
                 model.generate_sample_images(config.num_samples, samples_y), 
@@ -486,7 +503,7 @@ def run_eval(config):
             tf.logging.info("Plotting prior samples!")
             plot_prior_samples(summary_dir, step, samples_two)
 
-            if config.model == 'gmvae':
+            if config.model == 'gmvae' or config.model == 'gmvae_alt':
                 display_images(summary_dir, step, images_out[0])
                 display_images(summary_dir, step, images_out[1], name='sample_y')
             else:

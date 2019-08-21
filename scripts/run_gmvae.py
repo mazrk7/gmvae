@@ -12,7 +12,7 @@ tf.app.flags.DEFINE_enum('mode', 'train',
                          ['train', 'eval'],
                          "The mode of the binary.")
 tf.app.flags.DEFINE_enum('model', 'gmvae',
-                         ['gmvae', 'vae', 'vae_gmp'],
+                         ['gmvae', 'gmvae_alt', 'vae', 'vae_gmp'],
                          "Model choice.")
 tf.app.flags.DEFINE_integer('latent_size', 8,
                             "Number of dimensions in the latent state.")
