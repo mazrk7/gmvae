@@ -38,7 +38,7 @@ tf.app.flags.DEFINE_integer('max_steps', int(1e9),
                             "The number of gradient update steps to train for.")
 tf.app.flags.DEFINE_integer('num_samples', 10,
                             "Number of samples (or particles) for resampling algorithms.")
-tf.app.flags.DEFINE_integer('early_stop_rounds', 20000,
+tf.app.flags.DEFINE_integer('early_stop_rounds', 10000,
                             "Number of steps before terminating training due to early stopping.")
 tf.app.flags.DEFINE_float('early_stop_threshold', 0.001,
                           "Early stopping threshold for percentage improvement in validation loss.")

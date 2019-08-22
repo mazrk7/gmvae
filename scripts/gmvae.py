@@ -15,7 +15,7 @@ class GMVAE(object):
                  prior_gmm,
                  decoder,
                  encoder_y,
-                 encoder_mvn):
+                 encoder_gmm):
         """Create a GMVAE.
 
         Args:
@@ -27,13 +27,13 @@ class GMVAE(object):
                 and return a subclass of tf.distributions.Distribution that 
                 can be used to evaluate the log_prob of the targets.
             encoder_y: A callable that implements the inference q(y | x).
-            encoder_mvn: A callable that implements the inference q(z | x, y).
+            encoder_gmm: A callable that implements the inference q(z | x, y).
         """
 
         self._prior_gmm = prior_gmm
         self._decoder = decoder
         self._encoder_y = encoder_y
-        self._encoder_mvn = encoder_mvn
+        self._encoder_gmm = encoder_gmm
 
 
     def prior_gmm(self, y):
@@ -77,7 +77,7 @@ class GMVAE(object):
         return self._encoder_y(x)
 
 
-    def encoder_mvn(self, x, y):
+    def encoder_gmm(self, x, y):
         """Computes the inference distribution q(z | x, y).
 
 
@@ -91,7 +91,7 @@ class GMVAE(object):
         
         x = tf.cast(x, dtype=tf.float32)
 
-        return self._encoder_mvn(x, y)
+        return self._encoder_gmm(x, y)
 
 
 class TrainableGMVAE(GMVAE):
@@ -102,7 +102,7 @@ class TrainableGMVAE(GMVAE):
                  prior_gmm,
                  decoder,
                  encoder_y,
-                 encoder_mvn,
+                 encoder_gmm,
                  random_seed=None):
         """Create a trainable GMVAE.
 
@@ -116,13 +116,13 @@ class TrainableGMVAE(GMVAE):
                 and return a subclass of tf.distributions.Distribution that 
                 can be used to evaluate the log_prob of the targets.
             encoder_y: A callable that implements the inference q(y | x).
-            encoder_mvn: A callable that implements the inference q(z | x, y).
+            encoder_gmm: A callable that implements the inference q(z | x, y).
             random_seed: The seed for the random ops.
         """
 
         super(TrainableGMVAE, self).__init__(
             prior_gmm, decoder,
-            encoder_y, encoder_mvn)
+            encoder_y, encoder_gmm)
         self.mix_components = mix_components
         self.random_seed = random_seed
 
@@ -133,7 +133,7 @@ class TrainableGMVAE(GMVAE):
         q_y = self.encoder_y(images)
         y = tf.cast(q_y.sample(seed=self.random_seed), dtype=tf.float32)
 
-        q_z = self.encoder_mvn(images, y)
+        q_z = self.encoder_gmm(images, y)
         z = q_z.sample(seed=self.random_seed)
 
         p_x_given_z = self.decoder(z)
@@ -164,7 +164,7 @@ class TrainableGMVAE(GMVAE):
         q_y = self.encoder_y(inputs)
         y = q_y.mean()
 
-        q_z = self.encoder_mvn(inputs, y)
+        q_z = self.encoder_gmm(inputs, y)
         z = q_z.mean(name='code')
 
         return z
@@ -218,7 +218,7 @@ class TrainableGMVAE(GMVAE):
         p_z_given_y = self.prior_gmm(y)
 
         # Encoder accept images x and y as inputs to implement q(z | x, y)
-        q_z = self.encoder_mvn(images, y)
+        q_z = self.encoder_gmm(images, y)
         z = q_z.sample(seed=self.random_seed)
 
         # Generative distribution p(x | z)
@@ -305,14 +305,15 @@ def create_gmvae(
         hidden_activation_fn=hidden_activation_fn,
         name='encoder_y')
     # A callable that implements the inference distribution q(z | x, y)
-    encoder_mvn = base.ConditionalNormal(
+    encoder_gmm = base.GaussianMixture(
         size=latent_size,
         hidden_layer_sizes=fcnet_hidden_sizes,
         hidden_activation_fn=hidden_activation_fn,
+        mixture_components=mixture_components,
         sigma_min=sigma_min,
         raw_sigma_bias=raw_sigma_bias,
-        name='encoder_mvn')
+        name='encoder_gmm')
 
     return TrainableGMVAE(mixture_components, prior_gmm,
-                          decoder, encoder_y, encoder_mvn,
+                          decoder, encoder_y, encoder_gmm,
                           random_seed=random_seed)
