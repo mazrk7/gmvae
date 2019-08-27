@@ -15,18 +15,7 @@ from sklearn.manifold import TSNE
 
 import helpers
 import gmvae
-import gmvae_alt
 import vae
-
-
-# Flattens a Tensor according to the provided 3D-shape Tensor
-def flatten(inputs, shape, name='flattened'):
-    return tf.reshape(inputs, [-1, shape[-3]*shape[-2]*shape[-1]], name=name)
-
-
-# Unflattens a Tensor according to the provided 3D-shape Tensor
-def unflatten(inputs, shape, name='unflattened'):
-    return tf.reshape(inputs, [-1, shape[-3], shape[-2], shape[-1]], name=name)
 
 
 def reduce_dimensionality(data, dim=2, perplexity=40):
@@ -45,7 +34,7 @@ def create_logging_hook(step, train_loss, test_loss, every_steps=50):
             'train_loss', log_dict['train_loss'],
             'test_loss', log_dict['test_loss'])
 
-    logging_hook = tf.train.LoggingTensorHook(
+    logging_hook = tf.compat.v1.train.LoggingTensorHook(
         {'step': step, 
          'train_loss': train_loss,
          'test_loss': test_loss},
@@ -84,7 +73,6 @@ def create_dataset(config, split, shuffle, repeat):
 
     def _preprocess(sample):
         image = tf.cast(sample['image'], tf.float32) / 255.  # Scale to unit interval
-        image = image < tf.random.uniform(tf.shape(image))   # Randomly binarise
         return image, image, sample['label']
 
 
@@ -97,11 +85,11 @@ def create_dataset(config, split, shuffle, repeat):
     if shuffle:
         dataset = dataset.shuffle(datasets_info.splits[split].num_examples)
 
-    iterator = dataset.make_one_shot_iterator()
+    iterator = tf.compat.v1.data.make_one_shot_iterator(dataset)
     images, targets, labels = iterator.get_next()
 
-    flattened_images = flatten(images, image_shape, name=split+'_inputs')
-    flattened_targets = flatten(targets, image_shape, name=split+'_targets')
+    flattened_images = helpers.flatten_tensor(images, image_shape, name=split+'_inputs')
+    flattened_targets = helpers.flatten_tensor(targets, image_shape, name=split+'_targets')
 
     return flattened_images, flattened_targets, image_shape, labels
 
@@ -124,14 +112,14 @@ def run_train(config):
             global_step: The global step of the training process.
         """        
 
-        global_step = tf.train.get_or_create_global_step()
+        global_step = tf.compat.v1.train.get_or_create_global_step()
 
-        tf.logging.info("Loading the MNIST dataset...")
+        tf.compat.v1.logging.info("Loading the MNIST dataset...")
 
         train_images, train_targets, img_shape, _ = create_dataset(config, split='train', shuffle=True, repeat=True)
-        test_images, test_targets, _, _ = create_dataset(config, split='test', shuffle=True, repeat=True)
+        test_images, test_targets, _, test_labels = create_dataset(config, split='test', shuffle=True, repeat=True)
 
-        tf.logging.info("Building the computation graph...")
+        tf.compat.v1.logging.info("Building the computation graph...")
 
         if config.model == 'gmvae':
             # Create a gmvae.TrainableGMVAE model object
@@ -140,15 +128,8 @@ def run_train(config):
                                        mixture_components=config.mixture_components,
                                        fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
                                        sigma_min=0.0,
-                                       raw_sigma_bias=0.5)
-        elif config.model == 'gmvae_alt':
-            # Create a gmvae.TrainableGMVAE model object in an alternative implementation
-            model = gmvae_alt.create_gmvae(train_images.get_shape().as_list()[1],
-                                           config.latent_size,
-                                           mixture_components=config.mixture_components,
-                                           fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
-                                           sigma_min=0.0,
-                                           raw_sigma_bias=0.5)
+                                       raw_sigma_bias=0.5,
+                                       temperature=1.0)
         elif config.model == 'vae_gmp':
             # Create a mixture prior vae.TrainableVAE model object
             model = vae.create_vae(train_images.get_shape().as_list()[1],
@@ -169,30 +150,33 @@ def run_train(config):
             train_loss = model.run_model(train_images, train_targets)
 
         with tf.name_scope('test'):
-            test_loss = model.run_model(test_images, test_targets)
+            if config.model == 'gmvae':
+                test_loss = model.run_model(test_images, test_targets, test_labels)
+            else:
+                test_loss = model.run_model(test_images, test_targets)
 
-        opt = tf.train.AdamOptimizer(config.learning_rate)
+        opt = tf.compat.v1.train.AdamOptimizer(config.learning_rate)
         grads = opt.compute_gradients(train_loss, var_list=tf.trainable_variables())
         train_op = opt.apply_gradients(grads, global_step=global_step)
 
         with tf.name_scope('image_summaries'):
-            inputs = unflatten(
-                train_images[config.num_samples:], 
+            inputs = helpers.unflatten_tensor(
+                train_images, 
                 img_shape)
             helpers.image_tile_summary('inputs',
                 tf.cast(inputs, dtype=tf.float32),
                 rows=5,
                 cols=5)
 
-            recon = unflatten(
-                model.reconstruct_images(train_images[config.num_samples:]), 
+            recon = helpers.unflatten_tensor(
+                model.reconstruct_images(train_images), 
                 img_shape)
             helpers.image_tile_summary('reconstructions',
                 tf.cast(recon, dtype=tf.float32),
                 rows=5,
                 cols=5)
 
-            samples = unflatten(
+            samples = helpers.unflatten_tensor(
                 model.generate_sample_images(config.num_samples), 
                 img_shape)
             helpers.image_tile_summary('samples',
@@ -200,7 +184,7 @@ def run_train(config):
                 rows=5,
                 cols=5)
 
-        tf.logging.info("Successfully built the graph!")
+        tf.compat.v1.logging.info("Successfully built the graph!")
 
         return train_loss, test_loss, train_op, global_step
 
@@ -222,7 +206,7 @@ def run_train(config):
             config_proto = tf.ConfigProto(inter_op_parallelism_threads=1,
                                           intra_op_parallelism_threads=1)
             config_proto.gpu_options.allow_growth = True
-            config_proto.gpu_options.per_process_gpu_memory_fraction = 0.3
+            config_proto.gpu_options.per_process_gpu_memory_fraction = 0.5
             config_proto.log_device_placement = False
             config_proto.allow_soft_placement = True
             config_proto.gpu_options.visible_device_list = config.gpu_num
@@ -235,10 +219,10 @@ def run_train(config):
                 config.num_layers, 
                 config.latent_size)
             if  not tf.io.gfile.exists(logdir):
-                tf.logging.info("Creating log directory at {}".format(logdir))
+                tf.compat.v1.logging.info("Creating log directory at {}".format(logdir))
                 tf.io.gfile.makedirs(logdir)
 
-            with tf.train.MonitoredTrainingSession(
+            with tf.compat.v1.train.MonitoredTrainingSession(
                 config=config_proto,
                 hooks=[log_hook, early_hook],
                 checkpoint_dir=logdir,
@@ -275,9 +259,9 @@ def run_eval(config):
             global_step: The global step the checkpoint was loaded from.
         """
 
-        global_step = tf.train.get_or_create_global_step()
+        global_step = tf.compat.v1.train.get_or_create_global_step()
 
-        tf.logging.info("Loading the MNIST dataset...")
+        tf.compat.v1.logging.info("Loading the MNIST dataset...")
 
         images, targets, img_shape, labels = create_dataset(config, split=config.split, shuffle=False, repeat=False)
 
@@ -288,15 +272,8 @@ def run_eval(config):
                                        mixture_components=config.mixture_components,
                                        fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
                                        sigma_min=0.0,
-                                       raw_sigma_bias=0.5)
-        elif config.model == 'gmvae_alt':
-            # Create a gmvae.TrainableGMVAE model object in an alternative implementation
-            model = gmvae_alt.create_gmvae(images.get_shape().as_list()[1],
-                                           config.latent_size,
-                                           mixture_components=config.mixture_components,
-                                           fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
-                                           sigma_min=0.0,
-                                           raw_sigma_bias=0.5)
+                                       raw_sigma_bias=0.5,
+                                       temperature=1.0)
         elif config.model == 'vae_gmp':
             # Create a mixture prior vae.TrainableVAE model object
             model = vae.create_vae(images.get_shape().as_list()[1],
@@ -322,13 +299,13 @@ def run_eval(config):
 
         z = model.transform(images)
         samples = model.generate_samples(config.num_samples)
-        sample_images = unflatten(
+        sample_images = helpers.unflatten_tensor(
             model.generate_sample_images(config.num_samples, samples), 
             img_shape)
 
         if config.model == 'gmvae' or config.model == 'gmvae_alt':
             samples_y = model.generate_samples(config.num_samples, prior='y')
-            sample_images_y = unflatten(
+            sample_images_y = helpers.unflatten_tensor(
                 model.generate_sample_images(config.num_samples, samples_y), 
                 img_shape)
             sample_images = tf.stack((sample_images, sample_images_y), axis=0)
@@ -425,7 +402,7 @@ def run_eval(config):
             ax.set_ylabel("z2-tsne")
             ax.set_zlabel("z3-tsne")
         else:
-            tf.logging.error("Cannot accommodate that many dimensions!")
+            tf.compat.v1.logging.error("Cannot accommodate that many dimensions!")
 
         plt.savefig('{}/step_{}_dim_{}'.format(path, step, ndim))
         plt.show()
@@ -478,20 +455,20 @@ def run_eval(config):
         summary_dir = '{}/{}'.format(
             logdir,
             config.split)
-        summary_writer = tf.summary.FileWriter(summary_dir, flush_secs=15, max_queue=100)
+        summary_writer = tf.compat.v1.summary.FileWriter(summary_dir, flush_secs=15, max_queue=100)
 
-        saver = tf.train.Saver()
-        with tf.train.SingularMonitoredSession() as sess:
+        saver = tf.compat.v1.train.Saver()
+        with tf.compat.v1.train.SingularMonitoredSession() as sess:
             helpers.wait_for_checkpoint(saver, sess, logdir)
             step = sess.run(global_step)
-            tf.logging.info("Model restored from step %d" % step)
+            tf.compat.v1.logging.info("Model restored from step %d" % step)
 
             avg_loss, z_out, y_out = process_over_dataset(loss, bs, z, y, sess)
             summarise_loss(avg_loss, summary_writer, step)
 
-            tf.logging.info("%s loss/example: %f", config.split, avg_loss)
+            tf.compat.v1.logging.info("%s loss/example: %f", config.split, avg_loss)
 
-            tf.logging.info("Plotting latent code!")
+            tf.compat.v1.logging.info("Plotting latent code!")
             z_two = reduce_dimensionality(z_out[:config.num_samples])
             plot_latent(summary_dir, step, z_two, y_out[:config.num_samples])
             #z_three = reduce_dimensionality(z_out[:config.num_samples], dim=3)
@@ -500,7 +477,7 @@ def run_eval(config):
             samples_out, images_out = sess.run([samples, images])
             samples_two = reduce_dimensionality(samples_out)
 
-            tf.logging.info("Plotting prior samples!")
+            tf.compat.v1.logging.info("Plotting prior samples!")
             plot_prior_samples(summary_dir, step, samples_two)
 
             if config.model == 'gmvae' or config.model == 'gmvae_alt':
@@ -508,5 +485,3 @@ def run_eval(config):
                 display_images(summary_dir, step, images_out[1], name='sample_y')
             else:
                 display_images(summary_dir, step, images_out)
-
-

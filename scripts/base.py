@@ -12,78 +12,10 @@ tfd = tfp.distributions
 DEFAULT_INITIALISERS = {'w': tf.contrib.layers.xavier_initializer(), 'b': tf.zeros_initializer()}
 
 
-class GaussianMixture(object):
-    """A Gaussian Mixture Model conditioned on Tensor inputs via dense networks."""
-
-    def __init__(self, size, hidden_layer_sizes, initialisers=DEFAULT_INITIALISERS, 
-                 mixture_components=1, sigma_min=0.0, raw_sigma_bias=0.25, 
-                 hidden_activation_fn=tf.nn.relu, name='gaussian_mixture'):
-        """Creates a GMM that is conditioned on a dense network to learn the parameters
-        of the component distribution (multivariate Gaussian).
-
-        Args:
-            size: The dimension of the random variable.
-            hidden_layer_sizes: The sizes of the hidden layers of the fully connected
-                network used to condition the mixture on the inputs.
-            initialisers: The variable initialisers to use for the fully connected
-                network. The network is implemented using snt.nets.MLP so it must
-                be a dictionary mapping the keys 'w' and 'b' to the initialisers for
-                the weights and biases.
-            mixture_components: The number of components in the mixture.
-            sigma_min: The minimum standard deviation allowed, a scalar.
-            raw_sigma_bias: A scalar that is added to the raw standard deviation
-                output from the fully connected network. Set to 0.25 by default to
-                prevent standard deviations close to 0.
-            hidden_activation_fn: The activation function to use on the hidden layers
-                of the fully connected network.
-            name: The name of this distribution, used for sonnet scoping.
-        """
-
-        self.sigma_min = sigma_min
-        self.raw_sigma_bias = raw_sigma_bias
-        self.name = name
-        self.size = size
-        self.mix_components = mixture_components
-
-        self.fcnet = snt.nets.MLP(
-            output_sizes=hidden_layer_sizes + [mixture_components*2*size],
-            activation=hidden_activation_fn,
-            initializers=initialisers,
-            activate_final=False,
-            use_bias=True,
-            name=name + '_fcnet')
-
-
-    def condition(self, tensor_list, **unused_kwargs):
-        """Computes the parameters of a MultivariateNormalDiag distribution based on the inputs."""
-
-        inputs = tf.concat(tensor_list, axis=1)
-        outs = self.fcnet(inputs)
-
-        mu, sigma = tf.split(outs, 2, axis=1)
-        sigma = tf.maximum(tf.nn.softplus(sigma + self.raw_sigma_bias), self.sigma_min)
-
-        mu = tf.reshape(mu, [-1, self.mix_components, self.size])
-        sigma = tf.reshape(sigma, [-1, self.mix_components, self.size])
-
-        return mu, sigma
-
-
-    def __call__(self, *args, **kwargs):
-        """Creates a GMM distribution conditioned on the inputs."""
-
-        mu, sigma = self.condition(args, **kwargs)
-
-        return tfd.MixtureSameFamily(
-            components_distribution=tfd.MultivariateNormalDiag(loc=mu, scale_diag=sigma),
-            mixture_distribution=tfd.Categorical(tf.zeros([self.mix_components])),
-            name=self.name)
-
-
 class ConditionalNormal(object):
     """A MultivariateNormalDiag distribution conditioned on Tensor inputs via a dense network."""
 
-    def __init__(self, size, hidden_layer_sizes, initialisers=DEFAULT_INITIALISERS, 
+    def __init__(self, size, hidden_layer_sizes=None, initialisers=DEFAULT_INITIALISERS, 
                  sigma_min=0.0, raw_sigma_bias=0.25, hidden_activation_fn=tf.nn.relu, 
                  name='conditional_normal'):
         """Creates a conditional MultivariateNormalDiag distribution.
@@ -105,28 +37,37 @@ class ConditionalNormal(object):
             name: The name of this distribution, used for sonnet scoping.
         """
 
-        self.sigma_min = sigma_min
-        self.raw_sigma_bias = raw_sigma_bias
-        self.name = name
-        self.size = size
+        self._sigma_min = sigma_min
+        self._raw_sigma_bias = raw_sigma_bias
+        self._name = name
+        self._size = size
 
-        self.fcnet = snt.nets.MLP(
-            output_sizes=hidden_layer_sizes + [2*size],
-            activation=hidden_activation_fn,
-            initializers=initialisers,
-            activate_final=False,
-            use_bias=True,
-            name=name + '_fcnet')
+        if hidden_layer_sizes is None:
+            self._fcnet = snt.nets.MLP(
+                    output_sizes=[2*size],
+                    activation=hidden_activation_fn,
+                    initializers=initialisers,
+                    activate_final=False,
+                    use_bias=True,
+                    name=name + '_fcnet')
+        else:
+            self._fcnet = snt.nets.MLP(
+                output_sizes=hidden_layer_sizes + [2*size],
+                activation=hidden_activation_fn,
+                initializers=initialisers,
+                activate_final=False,
+                use_bias=True,
+                name=name + '_fcnet')
 
 
     def condition(self, tensor_list, **unused_kwargs):
         """Computes the parameters of a MultivariateNormalDiag distribution based on the inputs."""
 
         inputs = tf.concat(tensor_list, axis=1)
-        outs = self.fcnet(inputs)
+        outs = self._fcnet(inputs)
 
         mu, sigma = tf.split(outs, 2, axis=1)
-        sigma = tf.maximum(tf.nn.softplus(sigma + self.raw_sigma_bias), self.sigma_min)
+        sigma = tf.maximum(tf.nn.softplus(sigma + self._raw_sigma_bias), self._sigma_min)
         
         return mu, sigma
 
@@ -136,7 +77,7 @@ class ConditionalNormal(object):
 
         mu, sigma = self.condition(args, **kwargs)
         
-        return tfd.MultivariateNormalDiag(loc=mu, scale_diag=sigma, name=self.name)
+        return tfd.MultivariateNormalDiag(loc=mu, scale_diag=sigma, name=self._name)
 
 
 class ConditionalBernoulli(object):
@@ -159,10 +100,10 @@ class ConditionalBernoulli(object):
             name: The name of this distribution, used for sonnet scoping.
         """
 
-        self.name = name
-        self.size = size
+        self._name = name
+        self._size = size
 
-        self.fcnet = snt.nets.MLP(
+        self._fcnet = snt.nets.MLP(
             output_sizes=hidden_layer_sizes + [size],
             activation=hidden_activation_fn,
             initializers=initialisers,
@@ -176,7 +117,7 @@ class ConditionalBernoulli(object):
 
         inputs = tf.concat(tensor_list, axis=1)
         
-        return self.fcnet(inputs)
+        return self._fcnet(inputs)
 
 
     def __call__(self, *args, **kwargs):
@@ -187,20 +128,22 @@ class ConditionalBernoulli(object):
         return tfd.Independent(
             tfd.Bernoulli(logits=logits),
             reinterpreted_batch_ndims=1, # Assuming 1-D vector inputs (bs discluded)
-            name=self.name)
+            name=self._name)
 
 
 class ConditionalCategorical(object):
-    """A OneHotCategorical distribution conditioned on Tensor inputs via a dense network."""
+    """A RelaxedOneHotCategorical distribution conditioned on Tensor inputs via a dense network."""
 
-    def __init__(self, size, hidden_layer_sizes, initialisers=DEFAULT_INITIALISERS, 
+    def __init__(self, size, hidden_layer_sizes, temperature=1.0, initialisers=DEFAULT_INITIALISERS, 
                  hidden_activation_fn=tf.nn.relu, name='conditional_categorical'):
-        """Creates a conditional OneHotCategorical distribution.
+        """Creates a conditional RelaxedOneHotCategorical distribution.
 
         Args:
             size: The dimension of the random variable.
             hidden_layer_sizes: The sizes of the hidden layers of the fully connected
                 network used to condition the distribution on the inputs.
+            temperature: Degree of how approximately discrete the distribution is. The closer 
+                to 0, the more discrete and the closer to infinity, the more uniform.
             initialisers: The variable initializers to use for the fully connected
                 network. The network is implemented using snt.nets.MLP so it must
                 be a dictionary mapping the keys 'w' and 'b' to the initialisers for
@@ -210,10 +153,11 @@ class ConditionalCategorical(object):
             name: The name of this distribution, used for sonnet scoping.
         """
 
-        self.name = name
-        self.size = size
+        self._name = name
+        self._size = size
+        self._temperature = temperature
 
-        self.fcnet = snt.nets.MLP(
+        self._fcnet = snt.nets.MLP(
             output_sizes=hidden_layer_sizes + [size],
             activation=hidden_activation_fn,
             initializers=initialisers,
@@ -223,16 +167,19 @@ class ConditionalCategorical(object):
 
 
     def condition(self, tensor_list, **unused_kwargs):
-        """Computes the logits of a OneHotCategorical distribution."""
+        """Computes the logits of a RelaxedOneHotCategorical distribution."""
 
         inputs = tf.concat(tensor_list, axis=1)
         
-        return self.fcnet(inputs)
+        return self._fcnet(inputs)
 
 
     def __call__(self, *args, **kwargs):
-        """Creates a OneHotCategorical distribution conditioned on the inputs."""
+        """Creates a RelaxedOneHotCategorical distribution conditioned on the inputs."""
 
         logits = self.condition(args, **kwargs)
         
-        return tfd.OneHotCategorical(logits=logits, name=self.name)
+        return tfd.RelaxedOneHotCategorical(
+            self._temperature, 
+            logits=logits, 
+            name=self._name)

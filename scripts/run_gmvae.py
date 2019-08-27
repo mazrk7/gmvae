@@ -12,13 +12,13 @@ tf.app.flags.DEFINE_enum('mode', 'train',
                          ['train', 'eval'],
                          "The mode of the binary.")
 tf.app.flags.DEFINE_enum('model', 'gmvae',
-                         ['gmvae', 'gmvae_alt', 'vae', 'vae_gmp'],
+                         ['gmvae', 'vae', 'vae_gmp'],
                          "Model choice.")
 tf.app.flags.DEFINE_integer('latent_size', 8,
                             "Number of dimensions in the latent state.")
 tf.app.flags.DEFINE_integer('hidden_size', 64,
                             "Number of dimensions in the hidden layers.")
-tf.app.flags.DEFINE_integer('num_layers', 3,
+tf.app.flags.DEFINE_integer('num_layers', 1,
                             "Number of hidden layers in the internal networks.")
 tf.app.flags.DEFINE_integer('mixture_components', 10,
                             "Number of mixture components if using either a GMVAE "
@@ -36,9 +36,9 @@ tf.app.flags.DEFINE_float('learning_rate', 0.001,
                           "The learning rate for ADAM.")
 tf.app.flags.DEFINE_integer('max_steps', int(1e9),
                             "The number of gradient update steps to train for.")
-tf.app.flags.DEFINE_integer('num_samples', 10,
-                            "Number of samples (or particles) for resampling algorithms.")
-tf.app.flags.DEFINE_integer('early_stop_rounds', 10000,
+tf.app.flags.DEFINE_integer('num_samples', 100,
+                            "Number of samples for generated images.")
+tf.app.flags.DEFINE_integer('early_stop_rounds', 1000,
                             "Number of steps before terminating training due to early stopping.")
 tf.app.flags.DEFINE_float('early_stop_threshold', 0.001,
                           "Early stopping threshold for percentage improvement in validation loss.")
@@ -57,7 +57,7 @@ FLAGS = tf.app.flags.FLAGS
 
 
 def main(unused_argv):
-    tf.logging.set_verbosity(tf.logging.INFO)
+    tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.INFO)
 
     if FLAGS.mode == 'train':
         runners.run_train(FLAGS)
@@ -66,4 +66,4 @@ def main(unused_argv):
 
 
 if __name__ == '__main__':
-    tf.app.run(main)
+    tf.compat.v1.app.run(main)
