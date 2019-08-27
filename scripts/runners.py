@@ -57,9 +57,7 @@ def create_dataset(config, split, shuffle, repeat):
 
     Returns:
         images: A batch of image sequences represented as a dense Tensor 
-            of shape [batch_size, IMAGE_SIZE*IMAGE_SIZE*1].
-        targets: A batch of target sequences represented as a dense Tensor 
-            of shape [batch_size, IMAGE_SIZE*IMAGE_SIZE*1].
+            of shape [batch_size, IMAGE_SIZE, IMAGE_SIZE, 1].
         image_shape: A shape Tensor for the images contained in the dataset.
         labels: A batch of integer labels, for use in evaluation of clustering.
     """
@@ -73,7 +71,7 @@ def create_dataset(config, split, shuffle, repeat):
 
     def _preprocess(sample):
         image = tf.cast(sample['image'], tf.float32) / 255.  # Scale to unit interval
-        return image, image, sample['label']
+        return image, sample['label']
 
 
     dataset = (dataset.map(_preprocess)
@@ -85,13 +83,88 @@ def create_dataset(config, split, shuffle, repeat):
     if shuffle:
         dataset = dataset.shuffle(datasets_info.splits[split].num_examples)
 
-    iterator = tf.compat.v1.data.make_one_shot_iterator(dataset)
-    images, targets, labels = iterator.get_next()
+    iterator = tf.compat.v1.data.make_initializable_iterator(dataset)
+    images, labels = iterator.get_next()
+    
+    iterator_init = iterator.initializer
 
-    flattened_images = helpers.flatten_tensor(images, image_shape, name=split+'_inputs')
-    flattened_targets = helpers.flatten_tensor(targets, image_shape, name=split+'_targets')
+    return images, labels, iterator_init
 
-    return flattened_images, flattened_targets, image_shape, labels
+
+def create_model(config, split, inputs, labels, shape):
+    """Creates the model
+
+    Args:
+        config: A configuration object with config values accessible as properties.
+            Most likely a FLAGS object. This function expects the properties
+            batch_size, dataset_path, and latent_size to be defined.
+        split: The dataset split to load.
+        inputs: A batch of image sequences.
+        labels: A batch of integer labels, for use in evaluation of clustering.
+        shape: A shape tensor used to re-shape the inputs to feed into the model.
+
+    Returns:
+        model: Either a gmvae.TrainableGMVAE or vae.TrainableVAE model object.
+        loss: A float Tensor containing the model's loss value.
+    """
+
+    flat_inputs = helpers.flatten_tensor(inputs, shape, name=split + '_inputs')
+    data_dim = flat_inputs.get_shape().as_list()[1]
+
+    if config.model == 'gmvae':
+        # Create a gmvae.TrainableGMVAE model object
+        model = gmvae.create_gmvae(data_dim,
+                                   config.latent_size,
+                                   mixture_components=config.mixture_components,
+                                   fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
+                                   sigma_min=0.0,
+                                   raw_sigma_bias=0.5,
+                                   temperature=0.5)
+    elif config.model == 'vae_gmp':
+        # Create a mixture prior vae.TrainableVAE model object
+        model = vae.create_vae(data_dim,
+                               config.latent_size,
+                               mixture_components=config.mixture_components,
+                               fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
+                               sigma_min=0.0,
+                               raw_sigma_bias=0.5)
+    else:
+        # Create a standard vae.TrainableVAE model object
+        model = vae.create_vae(data_dim,
+                               config.latent_size,
+                               fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
+                               sigma_min=0.0,
+                               raw_sigma_bias=0.5)
+
+    with tf.name_scope(split):
+        if config.model == 'gmvae':
+            loss = model.run_model(flat_inputs, flat_inputs, labels)
+        else:
+            loss = model.run_model(flat_inputs, flat_inputs)
+
+        with tf.name_scope('image_summaries'):
+            helpers.image_tile_summary('inputs',
+                tf.cast(inputs, dtype=tf.float32),
+                rows=5,
+                cols=5)
+
+            recon = helpers.unflatten_tensor(
+                model.reconstruct_images(flat_inputs), 
+                shape)
+            helpers.image_tile_summary('reconstructions',
+                tf.cast(recon, dtype=tf.float32),
+                rows=5,
+                cols=5)
+
+            samples = helpers.unflatten_tensor(
+                model.generate_sample_images(config.num_samples), 
+                shape)
+            helpers.image_tile_summary('samples',
+                tf.cast(samples, dtype=tf.float32),
+                rows=5,
+                cols=5)
+
+    return model, loss
 
 
 def run_train(config):
@@ -116,77 +189,24 @@ def run_train(config):
 
         tf.compat.v1.logging.info("Loading the MNIST dataset...")
 
-        train_images, train_targets, img_shape, _ = create_dataset(config, split='train', shuffle=True, repeat=True)
-        test_images, test_targets, _, test_labels = create_dataset(config, split='test', shuffle=True, repeat=True)
+        train_images, train_labels, train_init = create_dataset(config, split='train', shuffle=True, repeat=True)
+        test_images, test_labels, test_init = create_dataset(config, split='test', shuffle=False, repeat=True)
+
+        # Get image shape for flattening on input to network
+        img_shape = train_images.get_shape().as_list()[1:]
 
         tf.compat.v1.logging.info("Building the computation graph...")
 
-        if config.model == 'gmvae':
-            # Create a gmvae.TrainableGMVAE model object
-            model = gmvae.create_gmvae(train_images.get_shape().as_list()[1],
-                                       config.latent_size,
-                                       mixture_components=config.mixture_components,
-                                       fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
-                                       sigma_min=0.0,
-                                       raw_sigma_bias=0.5,
-                                       temperature=1.0)
-        elif config.model == 'vae_gmp':
-            # Create a mixture prior vae.TrainableVAE model object
-            model = vae.create_vae(train_images.get_shape().as_list()[1],
-                                   config.latent_size,
-                                   mixture_components=config.mixture_components,
-                                   fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
-                                   sigma_min=0.0,
-                                   raw_sigma_bias=0.5)
-        else:
-            # Create a standard vae.TrainableVAE model object
-            model = vae.create_vae(train_images.get_shape().as_list()[1],
-                                   config.latent_size,
-                                   fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
-                                   sigma_min=0.0,
-                                   raw_sigma_bias=0.5)
-
-        with tf.name_scope('train'):
-            train_loss = model.run_model(train_images, train_targets)
-
-        with tf.name_scope('test'):
-            if config.model == 'gmvae':
-                test_loss = model.run_model(test_images, test_targets, test_labels)
-            else:
-                test_loss = model.run_model(test_images, test_targets)
+        train_model, train_loss = create_model(config, split='train', inputs=train_images, labels=train_labels, shape=img_shape)
+        test_model, test_loss = create_model(config, split='test', inputs=test_images, labels=test_labels, shape=img_shape)
 
         opt = tf.compat.v1.train.AdamOptimizer(config.learning_rate)
         grads = opt.compute_gradients(train_loss, var_list=tf.trainable_variables())
         train_op = opt.apply_gradients(grads, global_step=global_step)
 
-        with tf.name_scope('image_summaries'):
-            inputs = helpers.unflatten_tensor(
-                train_images, 
-                img_shape)
-            helpers.image_tile_summary('inputs',
-                tf.cast(inputs, dtype=tf.float32),
-                rows=5,
-                cols=5)
-
-            recon = helpers.unflatten_tensor(
-                model.reconstruct_images(train_images), 
-                img_shape)
-            helpers.image_tile_summary('reconstructions',
-                tf.cast(recon, dtype=tf.float32),
-                rows=5,
-                cols=5)
-
-            samples = helpers.unflatten_tensor(
-                model.generate_sample_images(config.num_samples), 
-                img_shape)
-            helpers.image_tile_summary('samples',
-                tf.cast(samples, dtype=tf.float32),
-                rows=5,
-                cols=5)
-
         tf.compat.v1.logging.info("Successfully built the graph!")
 
-        return train_loss, test_loss, train_op, global_step
+        return train_loss, train_init, test_loss, test_init, train_op, global_step
 
 
     with tf.Graph().as_default():
@@ -194,7 +214,7 @@ def run_train(config):
             tf.set_random_seed(config.random_seed)
 
         with tf.device('/gpu:{}'.format(config.gpu_id)):
-            train_loss, test_loss, train_op, global_step = create_graph()
+            train_loss, train_init, test_loss, test_init, train_op, global_step = create_graph()
 
             # Create session hooks
             log_hook = create_logging_hook(global_step, train_loss, test_loss, config.summarise_every)
@@ -222,8 +242,15 @@ def run_train(config):
                 tf.compat.v1.logging.info("Creating log directory at {}".format(logdir))
                 tf.io.gfile.makedirs(logdir)
 
+            scaffold = tf.train.Scaffold(
+                local_init_op=tf.group(
+                    tf.local_variables_initializer(),
+                    train_init,
+                    test_init)
+                )
             with tf.compat.v1.train.MonitoredTrainingSession(
                 config=config_proto,
+                scaffold=scaffold,
                 hooks=[log_hook, early_hook],
                 checkpoint_dir=logdir,
                 save_checkpoint_secs=120,
@@ -232,6 +259,7 @@ def run_train(config):
                 cur_step = -1
 
                 while not sess.should_stop() and cur_step <= config.max_steps:
+                    # Training
                     _, cur_step = sess.run([train_op, global_step])
 
 
@@ -273,7 +301,7 @@ def run_eval(config):
                                        fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
                                        sigma_min=0.0,
                                        raw_sigma_bias=0.5,
-                                       temperature=1.0)
+                                       temperature=0.5)
         elif config.model == 'vae_gmp':
             # Create a mixture prior vae.TrainableVAE model object
             model = vae.create_vae(images.get_shape().as_list()[1],

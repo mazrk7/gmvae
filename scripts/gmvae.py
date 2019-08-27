@@ -220,7 +220,7 @@ class TrainableGMVAE(GMVAE):
         return z
 
 
-    def run_model(self, images, targets, labels=None):
+    def run_model(self, images, targets, labels):
         """Runs the model and computes weights for a batch of images and targets.
 
         Args:
@@ -228,6 +228,7 @@ class TrainableGMVAE(GMVAE):
                 and with Tensor shape [batch_size, data_size].
             targets: A batch of target images generated from a dataset iterator
                 and with Tensor shape [batch_size, data_size].
+            labels: A batch of int labels to evaluate clustering performance.
 
         Returns:
             loss: A float loss Tensor.
@@ -271,9 +272,8 @@ class TrainableGMVAE(GMVAE):
         loss = -tf.reduce_mean(elbo_local)
         tf.compat.v1.summary.scalar('loss', loss)
 
-        if labels is not None:
-            cluster_acc = helpers.cluster_acc(q_y.distribution.logits, labels, self.mix_components)
-            tf.compat.v1.summary.scalar('cluster_acc', cluster_acc)
+        cluster_acc = helpers.cluster_acc(q_y.distribution.logits, labels, self.mix_components)
+        tf.compat.v1.summary.scalar('cluster_acc', cluster_acc)
 
         return loss
 
