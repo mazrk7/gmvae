@@ -4,7 +4,7 @@ python $WS_DIR/scripts/run_gmvae.py \
     --mode=train \
     --model=gmvae \
     --latent_size=64 \
-    --hidden_size=256 \
+    --hidden_size=512 \
     --num_layers=2 \
     --logdir="$WS_DIR/checkpoints" \
     --summarise_every=1000 \

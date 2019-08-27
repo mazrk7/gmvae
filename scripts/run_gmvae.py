@@ -36,7 +36,7 @@ tf.app.flags.DEFINE_float('learning_rate', 0.001,
                           "The learning rate for ADAM.")
 tf.app.flags.DEFINE_integer('max_steps', int(1e9),
                             "The number of gradient update steps to train for.")
-tf.app.flags.DEFINE_integer('num_samples', 100,
+tf.app.flags.DEFINE_integer('num_samples', 10,
                             "Number of samples for generated images.")
 tf.app.flags.DEFINE_integer('early_stop_rounds', 1000,
                             "Number of steps before terminating training due to early stopping.")

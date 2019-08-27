@@ -323,7 +323,7 @@ def create_gmvae(
     # sigma are output from a fully connected network conditioned on y
     prior_gmm = base.ConditionalNormal(
         size=latent_size,
-        hidden_layer_sizes=None,
+        hidden_layer_sizes=fcnet_hidden_sizes,
         hidden_activation_fn=hidden_activation_fn,
         sigma_min=sigma_min,
         raw_sigma_bias=raw_sigma_bias,

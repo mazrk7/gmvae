@@ -15,7 +15,7 @@ DEFAULT_INITIALISERS = {'w': tf.contrib.layers.xavier_initializer(), 'b': tf.zer
 class ConditionalNormal(object):
     """A MultivariateNormalDiag distribution conditioned on Tensor inputs via a dense network."""
 
-    def __init__(self, size, hidden_layer_sizes=None, initialisers=DEFAULT_INITIALISERS, 
+    def __init__(self, size, hidden_layer_sizes, initialisers=DEFAULT_INITIALISERS, 
                  sigma_min=0.0, raw_sigma_bias=0.25, hidden_activation_fn=tf.nn.relu, 
                  name='conditional_normal'):
         """Creates a conditional MultivariateNormalDiag distribution.
@@ -42,22 +42,13 @@ class ConditionalNormal(object):
         self._name = name
         self._size = size
 
-        if hidden_layer_sizes is None:
-            self._fcnet = snt.nets.MLP(
-                    output_sizes=[2*size],
-                    activation=hidden_activation_fn,
-                    initializers=initialisers,
-                    activate_final=False,
-                    use_bias=True,
-                    name=name + '_fcnet')
-        else:
-            self._fcnet = snt.nets.MLP(
-                output_sizes=hidden_layer_sizes + [2*size],
-                activation=hidden_activation_fn,
-                initializers=initialisers,
-                activate_final=False,
-                use_bias=True,
-                name=name + '_fcnet')
+        self._fcnet = snt.nets.MLP(
+            output_sizes=hidden_layer_sizes + [2*size],
+            activation=hidden_activation_fn,
+            initializers=initialisers,
+            activate_final=False,
+            use_bias=True,
+            name=name + '_fcnet')
 
 
     def condition(self, tensor_list, **unused_kwargs):

@@ -71,6 +71,7 @@ def create_dataset(config, split, shuffle, repeat):
 
     def _preprocess(sample):
         image = tf.cast(sample['image'], tf.float32) / 255.  # Scale to unit interval
+        image = image < tf.random.uniform(tf.shape(image))
         return image, sample['label']
 
 
@@ -119,7 +120,7 @@ def create_model(config, split, inputs, labels, shape):
                                    fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
                                    sigma_min=0.0,
                                    raw_sigma_bias=0.5,
-                                   temperature=0.5)
+                                   temperature=1.0)
     elif config.model == 'vae_gmp':
         # Create a mixture prior vae.TrainableVAE model object
         model = vae.create_vae(data_dim,
@@ -301,7 +302,7 @@ def run_eval(config):
                                        fcnet_hidden_sizes=[config.hidden_size] * config.num_layers,
                                        sigma_min=0.0,
                                        raw_sigma_bias=0.5,
-                                       temperature=0.5)
+                                       temperature=1.0)
         elif config.model == 'vae_gmp':
             # Create a mixture prior vae.TrainableVAE model object
             model = vae.create_vae(images.get_shape().as_list()[1],
