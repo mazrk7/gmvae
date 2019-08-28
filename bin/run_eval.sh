@@ -9,5 +9,5 @@ python $WS_DIR/scripts/run_gmvae.py \
     --logdir="$WS_DIR/checkpoints" \
     --num_samples=100 \
     --num_generations=10 \
-    --batch_size=16 \
+    --batch_size=32 \
     --split=test
