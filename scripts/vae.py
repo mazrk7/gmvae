@@ -93,6 +93,7 @@ class TrainableVAE(VAE):
         """
 
         super(TrainableVAE, self).__init__(prior, decoder, encoder)
+
         self.mix_components = mix_components
         self.random_seed = random_seed
 
@@ -109,13 +110,13 @@ class TrainableVAE(VAE):
         return recon
 
 
-    def generate_sample_images(self, num_samples, z=None):
-        """Generates mean sample images from the latent space.
+    def generate_sample_images(self, z=None, num_samples=1):
+        """Generates mean sample images from the model.
 
         Can provide latent variable 'z' to generate data for
         this point in the latent space. Else draw from prior.
         """
-
+        
         if z is None:
             z = self.generate_samples(num_samples)
 
@@ -166,17 +167,16 @@ class TrainableVAE(VAE):
         # Generative distribution p(x | z)
         p_x_given_z = self.decoder(z)
 
-        log_p_x_given_z = p_x_given_z.log_prob(targets)
-        tf.summary.scalar('nll_scalar', tf.reduce_mean(log_p_x_given_z))
+        # Reconstruction loss term i.e. the negative log-likelihood
+        nll = -tf.reduce_mean(p_x_given_z.log_prob(targets))
+        tf.summary.scalar('nll_scalar', nll)
 
-        log_p_z = p_z.log_prob(z)
-        log_q_z = q_z.log_prob(z)
-        tf.summary.scalar('latent_loss', tf.reduce_mean(log_p_z - log_q_z))
+        # Latent loss between approximate posterior and prior for z
+        kl_div_z = tf.reduce_mean(q_z.log_prob(z) - p_z.log_prob(z))
+        tf.summary.scalar('kl_div_z', kl_div_z)
         
-        # Need to maximise the ELBO with respect to these weights:
-        # - Generation network log_p_x_given_z --> Reconstruction loss
-        # - KL-Divergence --> Latent loss between approximate posterior log_q_z and prior log_p_z
-        loss = -tf.reduce_mean(log_p_x_given_z + log_p_z - log_q_z)
+        # Need to maximise the ELBO with respect to these weights
+        loss = nll + kl_div_z
         tf.summary.scalar('elbo', -loss)
 
         return loss
@@ -195,7 +195,7 @@ def create_vae(
 
     Args:
         data_size: The dimension of the vector that makes up the flattened images.
-        latent_size: The size of the stochastic latent state of the GMVAE.
+        latent_size: The size of the stochastic latent state of the VAE.
         mixture_components: The number of components in the mixture prior distribution.
             Defaults to 1 if not learning the prior parameters and using a single Gaussian.
         fcnet_hidden_sizes: A list of python integers, the size of the hidden
@@ -256,4 +256,5 @@ def create_vae(
         raw_sigma_bias=raw_sigma_bias,
         name='encoder')
 
-    return TrainableVAE(prior, decoder, encoder, mixture_components, random_seed=random_seed)
+    return TrainableVAE(prior, decoder, encoder, 
+        mixture_components, random_seed=random_seed)

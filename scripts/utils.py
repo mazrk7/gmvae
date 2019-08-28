@@ -7,6 +7,8 @@ import os
 
 import tensorflow as tf
 
+from sklearn.manifold import TSNE
+
 
 class EarlyStoppingHook(tf.estimator.SessionRunHook):
     """Monitor to request stop when 'loss_op' stops increasing."""
@@ -53,6 +55,24 @@ class EarlyStoppingHook(tf.estimator.SessionRunHook):
         if self._steps >= self._max_steps:
             tf.compat.v1.logging.info("[Early Stopping Criterion Satisfied]")
             run_context.request_stop()
+
+
+# Creates a logging hook that prints the loss values periodically
+def create_logging_hook(step, train_loss, test_loss, every_steps=50):
+
+    def summary_formatter(log_dict):
+        return "Step %d, %s: %f, %s: %f" % (log_dict['step'], 
+            'train_loss', log_dict['train_loss'],
+            'test_loss', log_dict['test_loss'])
+
+    logging_hook = tf.compat.v1.train.LoggingTensorHook(
+        {'step': step, 
+         'train_loss': train_loss,
+         'test_loss': test_loss},
+        every_n_iter=every_steps,
+        formatter=summary_formatter)
+
+    return logging_hook
 
 
 def restore_checkpoint_if_exists(saver, sess, logdir):
@@ -127,16 +147,29 @@ def unflatten_tensor(inputs, shape, name='unflattened'):
     return tf.reshape(inputs, [-1, shape[0], shape[1], shape[2]], name=name)
 
 
+def reduce_dimensionality(data, dim=2, perplexity=40):
+    if(data.shape[-1] > 2):
+        tsne = TSNE(n_components=dim, verbose=1, perplexity=perplexity, n_iter=300)
+        data = tsne.fit_transform(data)
+
+    return data
+
+
 def mode_tensor(x):
+    """Computes the mode of the float Tensor x."""
+
     y, idx, count = tf.unique_with_counts(x)
     mode = y[tf.argmax(count)]
 
     return tf.cast(mode, dtype=tf.float32)
 
 
-def xent_logits_only(targets, logits):
-    return tf.nn.softmax_cross_entropy_with_logits(
-        labels=tf.nn.softmax(targets), logits=logits)
+def entropy(logits, targets):
+    """Computes entropy as -sum(targets*log(predicted))"""
+
+    log_q = tf.nn.log_softmax(logits)
+
+    return -tf.reduce_sum(targets*log_q, axis=1)
 
 
 def cluster_acc(logits, labels, no_components):

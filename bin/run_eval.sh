@@ -7,6 +7,7 @@ python $WS_DIR/scripts/run_gmvae.py \
     --hidden_size=512 \
     --num_layers=2 \
     --logdir="$WS_DIR/checkpoints" \
-    --num_samples=1000 \
+    --num_samples=100 \
+    --num_generations=10 \
     --batch_size=16 \
     --split=test

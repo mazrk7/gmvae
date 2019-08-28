@@ -31,13 +31,11 @@ tf.app.flags.DEFINE_integer('random_seed', None,
                             "A random seed for seeding the TensorFlow graph.")
 
 
-# Training/Evaluation flags
+# Training flags
 tf.app.flags.DEFINE_float('learning_rate', 0.001,
                           "The learning rate for ADAM.")
 tf.app.flags.DEFINE_integer('max_steps', int(1e9),
                             "The number of gradient update steps to train for.")
-tf.app.flags.DEFINE_integer('num_samples', 10,
-                            "Number of samples for generated images.")
 tf.app.flags.DEFINE_integer('early_stop_rounds', 1000,
                             "Number of steps before terminating training due to early stopping.")
 tf.app.flags.DEFINE_float('early_stop_threshold', 0.001,
@@ -48,6 +46,13 @@ tf.app.flags.DEFINE_string('gpu_id', '0',
                             "GPU device id to use.")
 tf.app.flags.DEFINE_string('gpu_num', '0',
                             "Comma-separated list of GPU ids to use.")
+
+
+# Evaluation flags
+tf.app.flags.DEFINE_integer('num_samples', 10,
+                            "Number of samples to draw from a model's prior distribution.")
+tf.app.flags.DEFINE_integer('num_generations', 10,
+                            "Number of generated images to yield.")
 tf.app.flags.DEFINE_enum('split', 'train',
                          ['train', 'test'],
                          "Split to evaluate the model on.")
