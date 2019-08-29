@@ -16,7 +16,7 @@ import gmvae
 import vae
 
 
-def create_dataset(config, split, shuffle, repeat):
+def create_dataset(config, split, handle, shuffle, repeat):
     """Creates the MNIST dataset for a given config.
 
     Args:
@@ -24,6 +24,7 @@ def create_dataset(config, split, shuffle, repeat):
             Most likely a FLAGS object. This function expects the properties
             batch_size, dataset_path, and latent_size to be defined.
         split: The dataset split to load.
+        handle: A tf.placeholder for the iterator handle.
         shuffle: If true, shuffle the dataset randomly.
         repeat: If true, repeat the dataset endlessly.
 
@@ -31,7 +32,7 @@ def create_dataset(config, split, shuffle, repeat):
         images: A batch of image sequences represented as a dense Tensor 
             of shape [batch_size, IMAGE_SIZE, IMAGE_SIZE, 1].
         labels: A batch of integer labels, for use in evaluation of clustering.
-        iterator: An initializable iterator object for the split set.
+        iter_str: A string handle to the split set's iterator.
     """
 
     dataset, datasets_info = tfds.load(name='mnist',
@@ -46,7 +47,7 @@ def create_dataset(config, split, shuffle, repeat):
         return image, sample['label']
 
 
-    dataset = (dataset.map(_preprocess)
+    dataset = (dataset.map(_preprocess, num_parallel_calls=8)
                       .batch(config.batch_size)
                       .prefetch(tf.data.experimental.AUTOTUNE))
     
@@ -55,10 +56,13 @@ def create_dataset(config, split, shuffle, repeat):
     if shuffle:
         dataset = dataset.shuffle(datasets_info.splits[split].num_examples)
 
-    iterator = tf.compat.v1.data.make_initializable_iterator(dataset)
+    iterator = tf.compat.v1.data.Iterator.from_string_handle(
+        handle, dataset.output_types, dataset.output_shapes)
     images, labels = iterator.get_next()
     
-    return images, labels, iterator
+    iter_str = tf.compat.v1.data.make_one_shot_iterator(dataset).string_handle()
+
+    return images, labels, iter_str
 
 
 def create_model(config, data_dim):
@@ -159,54 +163,78 @@ def run_train(config):
         return loss
 
 
-    def create_graph():
+    def create_training_graph(handle):
         """Creates the training graph and loss to be optimised.
 
+        Args:
+            handle: A tf.placeholder for the iterator handle.
+
         Returns:
-            train_loss: A float Tensor containing the training set's loss value.
-            train_iter: The training set's initialisable iterator.
-            test_loss: A float Tensor containing the testing set's loss value.
-            test_iter: The test set's initialisable iterator.
+            loss: A float Tensor containing the training set's loss value.
+            iterator: The training set's string iterator handle.
+            model: The trainable model object.
             train_op: The training operation of the graph.
             global_step: The global step of the training process.
         """        
 
         global_step = tf.compat.v1.train.get_or_create_global_step()
 
-        tf.compat.v1.logging.info("Loading the MNIST dataset...")
+        with tf.device('/cpu:0'):
+            tf.compat.v1.logging.info("Loading the MNIST training set...")
+            images, labels, iterator = create_dataset(config, 
+                split='train', handle=handle, shuffle=True, repeat=True)
 
-        train_images, train_labels, train_iter = create_dataset(config, split='train', shuffle=True, repeat=True)
-        test_images, test_labels, test_iter = create_dataset(config, split='test', shuffle=False, repeat=True)
-
-        # Get image shape for flattening on input to network
-        img_shape = train_images.get_shape().as_list()[1:]
-
-        tf.compat.v1.logging.info("Building the computation graph...")
-
+        tf.compat.v1.logging.info("Building the training graph...")
+        img_shape = images.get_shape().as_list()[1:]
         model = create_model(config, data_dim=np.prod(img_shape))
-
-        train_loss = create_model_loss('train', model, 
-            inputs=train_images, labels=train_labels, shape=img_shape)
-        test_loss = create_model_loss('test', model, 
-            inputs=test_images, labels=test_labels, shape=img_shape)
+        loss = create_model_loss('train', model, inputs=images, labels=labels, shape=img_shape)
 
         opt = tf.compat.v1.train.AdamOptimizer(config.learning_rate)
-        grads = opt.compute_gradients(train_loss, var_list=tf.trainable_variables())
+        grads = opt.compute_gradients(loss, var_list=tf.trainable_variables())
         train_op = opt.apply_gradients(grads, global_step=global_step)
+        tf.compat.v1.logging.info("Successfully built the training graph!")
 
-        tf.compat.v1.logging.info("Successfully built the graph!")
+        return loss, iterator, model, train_op, global_step
 
-        return train_loss, train_iter, test_loss, test_iter, train_op, global_step
+
+    def create_evaluation_graph(handle, model):
+        """Creates the graph to evaluate the provided latent variable 'model'.
+
+        Args:
+            handle: A tf.placeholder for the iterator handle.
+            model: A trainable VAE or GMVAE model.
+
+        Returns:
+            loss: A float Tensor containing the test set's loss value.
+            iterator: The test set's string iterator handle.
+        """        
+
+        with tf.device('/cpu:0'):
+            tf.compat.v1.logging.info("Loading the MNIST test set...")
+            images, labels, iterator = create_dataset(config, 
+                split='test', handle=handle, shuffle=False, repeat=True)
+
+        tf.compat.v1.logging.info("Building the evaluation graph...")
+        img_shape = images.get_shape().as_list()[1:]
+        loss = create_model_loss('test', model, inputs=images, labels=labels, shape=img_shape)
+        tf.compat.v1.logging.info("Successfully built the evaluation graph!")
+
+        return loss, iterator
 
 
     with tf.Graph().as_default():
         if config.random_seed: 
             tf.set_random_seed(config.random_seed)
-
+        
         with tf.device('/gpu:{}'.format(config.gpu_id)):
-            train_loss, train_iter, test_loss, test_iter, train_op, global_step = create_graph()
+            # Placeholder for the dataset iterator handle
+            handle = tf.placeholder(tf.string, shape=[])
+
+            train_loss, train_iter, model, train_op, global_step = create_training_graph(handle)
+            test_loss, test_iter = create_evaluation_graph(handle, model)
 
             # Create session hooks
+            ds_handle_hook = utils.DatasetHandleHook(train_iter, test_iter)
             log_hook = utils.create_logging_hook(global_step, train_loss, test_loss, config.summarise_every)
             early_hook = utils.EarlyStoppingHook(loss_op=test_loss,
                                 max_steps=config.early_stop_rounds,
@@ -232,17 +260,9 @@ def run_train(config):
                 tf.compat.v1.logging.info("Creating log directory at {}".format(logdir))
                 tf.io.gfile.makedirs(logdir)
 
-            # Scaffold to initialise iterators as local variables
-            scaffold = tf.train.Scaffold(
-                local_init_op=tf.group(
-                    tf.local_variables_initializer(),
-                    train_iter.initializer,
-                    test_iter.initializer)
-                )
             with tf.compat.v1.train.MonitoredTrainingSession(
                 config=config_proto,
-                scaffold=scaffold,
-                hooks=[log_hook, early_hook],
+                hooks=[ds_handle_hook, log_hook, early_hook],
                 checkpoint_dir=logdir,
                 save_checkpoint_secs=120,
                 save_summaries_steps=config.summarise_every,
@@ -250,7 +270,11 @@ def run_train(config):
                 cur_step = -1
 
                 while not sess.should_stop() and cur_step <= config.max_steps:
-                    _, cur_step = sess.run([train_op, global_step])
+                    # Train the model
+                    _, cur_step = sess.run([train_op, global_step], feed_dict={handle: ds_handle_hook.train_handle})
+
+                    # Evaluate the model
+                    sess.run(test_loss, feed_dict={handle: ds_handle_hook.valid_handle})
 
 
 def run_eval(config):
@@ -263,8 +287,11 @@ def run_eval(config):
         config: A configuration object with config values accessible as properties.
     """
 
-    def create_graph():
+    def create_graph(handle):
         """Creates the evaluation graph.
+
+        Args:
+            handle: A tf.placeholder for the iterator handle.
 
         Returns:
             sum_loss: A tuple of float Tensors containing the loss value
@@ -274,15 +301,16 @@ def run_eval(config):
             samples: Samples from the model prior.
             sample_images: Sampled images from the model prior.
             labels: The labels associated with a batch of data.
-            iterator: The split set's initialisable iterator.
+            iterator: The split set's string iterator handle.
             global_step: The global step the checkpoint was loaded from.
         """
 
         global_step = tf.compat.v1.train.get_or_create_global_step()
 
-        tf.compat.v1.logging.info("Loading the MNIST dataset...")
-
-        images, labels, iterator = create_dataset(config, split=config.split, shuffle=False, repeat=False)
+        with tf.device('/cpu:0'):
+            tf.compat.v1.logging.info("Loading the MNIST dataset...")
+            images, labels, iterator = create_dataset(config, 
+                split=config.split, handle=handle, shuffle=False, repeat=False)
 
         # Get image shape for flattening on input to network
         img_shape = images.get_shape().as_list()[1:]
@@ -326,7 +354,7 @@ def run_eval(config):
         return (tf.reduce_sum(loss), batch_size, z, samples, sample_images, labels, iterator, global_step)
 
 
-    def process_over_dataset(loss, batch_size, z, y, sess):
+    def process_over_dataset(loss, batch_size, z, y, sess, handle, iter_str):
         """Process the dataset, averaging over the loss.
 
         Args:
@@ -336,6 +364,8 @@ def run_eval(config):
             z: The latent variables to accumulate over the dataset.
             y: The labels to accumulate over the dataset.
             sess: A TensorFlow Session object.
+            handle: A tf.placeholder for the iterator handle.
+            iter_str: The split set's string iterator handle.
         Returns:
             avg_loss: A float containing the average loss value, normalised by 
                 the number of examples in the dataset.
@@ -350,7 +380,7 @@ def run_eval(config):
 
         while True:
             try:
-                outs = sess.run([loss, batch_size, z, y])
+                outs = sess.run([loss, batch_size, z, y], feed_dict={handle: iter_str})
             except tf.errors.OutOfRangeError:
                 break
 
@@ -438,7 +468,10 @@ def run_eval(config):
         if config.random_seed: 
             tf.set_random_seed(config.random_seed)
 
-        loss, bs, z, samples, images, y, iterator, global_step = create_graph()
+        # Placeholder for the dataset iterator handle
+        handle = tf.placeholder(tf.string, shape=[])
+
+        loss, bs, z, samples, images, y, iter_str, global_step = create_graph(handle)
 
         # Set up log directory for loading checkpoints
         logdir = '{}/{}/h{}_n{}_z{}'.format(
@@ -457,13 +490,11 @@ def run_eval(config):
         saver = tf.compat.v1.train.Saver()
         with tf.compat.v1.train.SingularMonitoredSession() as sess:
             utils.wait_for_checkpoint(saver, sess, logdir)
-            step = sess.run(global_step)
-            # Initialise dataset iterator
-            sess.run(iterator.initializer)
+            step, iter_str_out = sess.run([global_step, iter_str])
 
             tf.compat.v1.logging.info("Model restored from step %d" % step)
 
-            avg_loss, z_out, y_out = process_over_dataset(loss, bs, z, y, sess)
+            avg_loss, z_out, y_out = process_over_dataset(loss, bs, z, y, sess, handle, iter_str_out)
             summarise_loss(avg_loss, summary_writer, step)
 
             tf.compat.v1.logging.info("%s loss/example: %f", config.split, avg_loss)
@@ -472,7 +503,7 @@ def run_eval(config):
             z_two = utils.reduce_dimensionality(z_out)
             plot_latent(summary_dir, step, z_two, y_out)
 
-            samples_out, images_out = sess.run([samples, images])
+            samples_out, images_out = sess.run([samples, images], feed_dict={handle: iter_str_out})
             samples_two = utils.reduce_dimensionality(samples_out)
 
             tf.compat.v1.logging.info("Plotting prior samples!")

@@ -10,6 +10,24 @@ import tensorflow as tf
 from sklearn.manifold import TSNE
 
 
+class DatasetHandleHook(tf.estimator.SessionRunHook):
+    """Hook for dataset handles during simultaneous training and validation."""
+
+    def __init__(self, train_str, valid_str):
+        self._train_str = train_str
+        self._valid_str = valid_str
+
+        self.train_handle = None
+        self.valid_handle = None
+
+
+    def after_create_session(self, sess, coord):
+        del coord
+
+        if self._train_str is not None:
+            self.train_handle, self.valid_handle = sess.run([self._train_str, self._valid_str])
+
+
 class EarlyStoppingHook(tf.estimator.SessionRunHook):
     """Monitor to request stop when 'loss_op' stops increasing."""
 

@@ -3,7 +3,7 @@ WS_DIR=$HOME/workspace/gmvae
 python $WS_DIR/scripts/run_gmvae.py \
     --mode=train \
     --model=gmvae \
-    --latent_size=128 \
+    --latent_size=64 \
     --hidden_size=512 \
     --num_layers=2 \
     --logdir="$WS_DIR/checkpoints" \
