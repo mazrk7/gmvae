@@ -222,6 +222,14 @@ def run_train(config):
         return loss, iterator
 
 
+    def step_fn(step_context):
+        # Train the model
+        _, cur_step = step_context.session.run([train_op, global_step], feed_dict={handle: ds_handle_hook.train_handle})
+
+        # Return evaluation of the model
+        return cur_step, step_context.run_with_hooks(test_loss, feed_dict={handle: ds_handle_hook.valid_handle})
+
+
     with tf.Graph().as_default():
         if config.random_seed: 
             tf.set_random_seed(config.random_seed)
@@ -270,11 +278,7 @@ def run_train(config):
                 cur_step = -1
 
                 while not sess.should_stop() and cur_step <= config.max_steps:
-                    # Train the model
-                    _, cur_step = sess.run([train_op, global_step], feed_dict={handle: ds_handle_hook.train_handle})
-
-                    # Evaluate the model
-                    sess.run(test_loss, feed_dict={handle: ds_handle_hook.valid_handle})
+                    cur_step, _ = sess.run_step_fn(step_fn)
 
 
 def run_eval(config):
@@ -354,7 +358,7 @@ def run_eval(config):
         return (tf.reduce_sum(loss), batch_size, z, samples, sample_images, labels, iterator, global_step)
 
 
-    def process_over_dataset(loss, batch_size, z, y, sess, handle, iter_str):
+    def process_over_dataset(loss, batch_size, z, y, sess, iter_str):
         """Process the dataset, averaging over the loss.
 
         Args:
@@ -364,8 +368,8 @@ def run_eval(config):
             z: The latent variables to accumulate over the dataset.
             y: The labels to accumulate over the dataset.
             sess: A TensorFlow Session object.
-            handle: A tf.placeholder for the iterator handle.
             iter_str: The split set's string iterator handle.
+            
         Returns:
             avg_loss: A float containing the average loss value, normalised by 
                 the number of examples in the dataset.
@@ -494,7 +498,7 @@ def run_eval(config):
 
             tf.compat.v1.logging.info("Model restored from step %d" % step)
 
-            avg_loss, z_out, y_out = process_over_dataset(loss, bs, z, y, sess, handle, iter_str_out)
+            avg_loss, z_out, y_out = process_over_dataset(loss, bs, z, y, sess, iter_str_out)
             summarise_loss(avg_loss, summary_writer, step)
 
             tf.compat.v1.logging.info("%s loss/example: %f", config.split, avg_loss)
