@@ -14,7 +14,9 @@ class VAE(object):
     def __init__(self,
                  prior,
                  decoder,
-                 encoder):
+                 encoder,
+                 mix_components,
+                 random_seed):
         """Create a VAE.
 
         Args:
@@ -24,11 +26,16 @@ class VAE(object):
                 and return a subclass of tf.distributions.Distribution that 
                 can be used to evaluate the log_prob of the targets.
             encoder: A callable that implements the inference q(z | x).
+            mix_components: The number of components in the mixture prior.
+            random_seed: The seed for the random ops.
         """
 
         self._prior = prior
         self._decoder = decoder
         self._encoder = encoder
+
+        self.mix_components = mix_components
+        self.random_seed = random_seed
 
 
     def prior(self):
@@ -68,34 +75,6 @@ class VAE(object):
         x = tf.cast(x, dtype=tf.float32)
 
         return self._encoder(x)
-
-
-class TrainableVAE(VAE):
-    """A VAE subclass with methods for training and evaluation."""
-
-    def __init__(self,
-                 prior,
-                 decoder,
-                 encoder,
-                 mix_components=1,
-                 random_seed=None):
-        """Create a trainable VAE.
-
-        Args:
-            prior: A tf.distributions.Distribution that implements p(z).
-            decoder: A callable that implements the generative distribution
-                p(x | z). Must accept as arguments the latent state z
-                and return a subclass of tf.distributions.Distribution that 
-                can be used to evaluate the log_prob of the targets.
-            encoder: A callable that implements the inference q(z | x).
-            mix_components: The number of components in the mixture prior.
-            random_seed: The seed for the random ops.
-        """
-
-        super(TrainableVAE, self).__init__(prior, decoder, encoder)
-
-        self.mix_components = mix_components
-        self.random_seed = random_seed
 
 
     def reconstruct_images(self, images):
@@ -144,6 +123,33 @@ class TrainableVAE(VAE):
         return z
 
 
+class TrainableVAE(VAE):
+    """A VAE subclass with methods for training."""
+
+    def __init__(self,
+                 prior,
+                 decoder,
+                 encoder,
+                 mix_components=1,
+                 random_seed=None):
+        """Create a trainable VAE.
+
+        Args:
+            prior: A tf.distributions.Distribution that implements p(z).
+            decoder: A callable that implements the generative distribution
+                p(x | z). Must accept as arguments the latent state z
+                and return a subclass of tf.distributions.Distribution that 
+                can be used to evaluate the log_prob of the targets.
+            encoder: A callable that implements the inference q(z | x).
+            mix_components: The number of components in the mixture prior.
+            random_seed: The seed for the random ops.
+        """
+
+        super(TrainableVAE, self).__init__(
+            prior, decoder, encoder,
+            mix_components, random_seed)
+
+
     def run_model(self, images, targets):
         """Runs the model and computes weights for a batch of images and targets.
 
@@ -190,6 +196,7 @@ def create_vae(
     hidden_activation_fn=tf.nn.relu,
     sigma_min=0.001,
     raw_sigma_bias=0.25,
+    gen_bias_init=0.0,
     random_seed=None):
     """A factory method for creating VAEs.
 
@@ -209,6 +216,9 @@ def create_vae(
         raw_sigma_bias: A scalar that is added to the raw standard deviation
             output from the neural networks that parameterise the prior and
             approximate posterior. Useful for preventing standard deviations close to zero.
+        gen_bias_init: A bias to added to the raw output of the fully connected network 
+            that parameterizes the generative distribution. Useful or initalising the mean 
+            to a sensible starting point e.g. mean of training set.
         random_seed: A random seed for the resampling operations.
 
     Returns:
@@ -245,6 +255,7 @@ def create_vae(
         size=data_size,
         hidden_layer_sizes=fcnet_hidden_sizes,
         hidden_activation_fn=hidden_activation_fn,
+        bias_init=gen_bias_init,
         name='decoder')
 
     # A callable that implements the inference distribution q(z | x)

@@ -10,24 +10,6 @@ import tensorflow as tf
 from sklearn.manifold import TSNE
 
 
-class DatasetHandleHook(tf.estimator.SessionRunHook):
-    """Hook for dataset handles during simultaneous training and validation."""
-
-    def __init__(self, train_str, valid_str):
-        self._train_str = train_str
-        self._valid_str = valid_str
-
-        self.train_handle = None
-        self.valid_handle = None
-
-
-    def after_create_session(self, sess, coord):
-        del coord
-
-        if self._train_str is not None:
-            self.train_handle, self.valid_handle = sess.run([self._train_str, self._valid_str])
-
-
 class EarlyStoppingHook(tf.estimator.SessionRunHook):
     """Monitor to request stop when 'loss_op' stops increasing."""
 
@@ -76,17 +58,15 @@ class EarlyStoppingHook(tf.estimator.SessionRunHook):
 
 
 # Creates a logging hook that prints the loss values periodically
-def create_logging_hook(step, train_loss, test_loss, every_steps=50):
+def create_logging_hook(step, loss, every_steps=50):
 
     def summary_formatter(log_dict):
-        return "Step %d, %s: %f, %s: %f" % (log_dict['step'], 
-            'train_loss', log_dict['train_loss'],
-            'test_loss', log_dict['test_loss'])
+        return "Step %d, %s: %f" % (log_dict['step'], 
+            'loss', log_dict['loss'])
 
     logging_hook = tf.compat.v1.train.LoggingTensorHook(
         {'step': step, 
-         'train_loss': train_loss,
-         'test_loss': test_loss},
+         'loss': loss},
         every_n_iter=every_steps,
         formatter=summary_formatter)
 

@@ -9,13 +9,13 @@ import tensorflow_probability as tfp
 
 
 tfd = tfp.distributions
-DEFAULT_INITIALISERS = {'w': tf.contrib.layers.xavier_initializer(), 'b': tf.zeros_initializer()}
+DEFAULT_INITIALIZERS = {'w': tf.contrib.layers.xavier_initializer(), 'b': tf.zeros_initializer()}
 
 
 class ConditionalNormal(object):
     """A MultivariateNormalDiag distribution conditioned on Tensor inputs via a dense network."""
 
-    def __init__(self, size, hidden_layer_sizes=None, initialisers=DEFAULT_INITIALISERS, 
+    def __init__(self, size, hidden_layer_sizes=None, initializers=DEFAULT_INITIALIZERS, 
                  sigma_min=0.0, raw_sigma_bias=0.25, hidden_activation_fn=tf.nn.relu, 
                  name='cond_normal'):
         """Creates a conditional MultivariateNormalDiag distribution.
@@ -25,9 +25,9 @@ class ConditionalNormal(object):
             hidden_layer_sizes: The sizes of the hidden layers of the fully connected
                 network used to condition the distribution on the inputs. If None,
                 then the default is a single-layered dense network.
-            initialisers: The variable initialisers to use for the fully connected
+            initializers: The variable initializers to use for the fully connected
                 network. The network is implemented using snt.nets.MLP so it must
-                be a dictionary mapping the keys 'w' and 'b' to the initialisers for
+                be a dictionary mapping the keys 'w' and 'b' to the initializers for
                 the weights and biases.
             sigma_min: The minimum standard deviation allowed, a scalar.
             raw_sigma_bias: A scalar that is added to the raw standard deviation
@@ -38,16 +38,16 @@ class ConditionalNormal(object):
             name: The name of this distribution, used for sonnet scoping.
         """
 
-        self._sigma_min = sigma_min
-        self._raw_sigma_bias = raw_sigma_bias
         self._name = name
         self._size = size
+        self._sigma_min = sigma_min
+        self._raw_sigma_bias = raw_sigma_bias
 
         if hidden_layer_sizes is not None:
             self._fcnet = snt.nets.MLP(
                 output_sizes=hidden_layer_sizes + [2*size],
                 activation=hidden_activation_fn,
-                initializers=initialisers,
+                initializers=initializers,
                 activate_final=False,
                 use_bias=True,
                 name=name + '_fcnet')
@@ -55,7 +55,7 @@ class ConditionalNormal(object):
             self._fcnet = snt.nets.MLP(
                 output_sizes=[2*size],
                 activation=hidden_activation_fn,
-                initializers=initialisers,
+                initializers=initializers,
                 activate_final=False,
                 use_bias=True,
                 name=name + '_fcnet')
@@ -87,8 +87,8 @@ class ConditionalNormal(object):
 class ConditionalBernoulli(object):
     """A Bernoulli distribution conditioned on Tensor inputs via a dense network."""
 
-    def __init__(self, size, hidden_layer_sizes=None, initialisers=DEFAULT_INITIALISERS, 
-                 hidden_activation_fn=tf.nn.relu, name='cond_bernoulli'):
+    def __init__(self, size, hidden_layer_sizes, initializers=DEFAULT_INITIALIZERS, 
+                 bias_init=0.0, hidden_activation_fn=tf.nn.relu, name='cond_bernoulli'):
         """Creates a conditional Bernoulli distribution.
 
         Args:
@@ -96,10 +96,12 @@ class ConditionalBernoulli(object):
             hidden_layer_sizes: The sizes of the hidden layers of the fully connected
                 network used to condition the distribution on the inputs. If None,
                 then the default is a single-layered dense network.
-            initialisers: The variable initialisers to use for the fully connected
+            initializers: The variable initializers to use for the fully connected
                 network. The network is implemented using snt.nets.MLP so it must
-                be a dictionary mapping the keys 'w' and 'b' to the initialisers for
+                be a dictionary mapping the keys 'w' and 'b' to the initializers for
                 the weights and biases.
+            bias_init: A scalar or vector Tensor that is added to the output of the
+                fully connected network and parameterizes the distribution mean.
             hidden_activation_fn: The activation function to use on the hidden layers
                 of the fully connected network.
             name: The name of this distribution, used for sonnet scoping.
@@ -107,12 +109,13 @@ class ConditionalBernoulli(object):
 
         self._name = name
         self._size = size
+        self._bias_init = bias_init
 
         if hidden_layer_sizes is not None:
             self._fcnet = snt.nets.MLP(
                 output_sizes=hidden_layer_sizes + [size],
                 activation=hidden_activation_fn,
-                initializers=initialisers,
+                initializers=initializers,
                 activate_final=False,
                 use_bias=True,
                 name=name + '_fcnet')
@@ -120,7 +123,7 @@ class ConditionalBernoulli(object):
             self._fcnet = snt.nets.MLP(
                 output_sizes=[size],
                 activation=hidden_activation_fn,
-                initializers=initialisers,
+                initializers=initializers,
                 activate_final=False,
                 use_bias=True,
                 name=name + '_fcnet')
@@ -131,7 +134,7 @@ class ConditionalBernoulli(object):
 
         inputs = tf.concat(tensor_list, axis=1)
         
-        return self._fcnet(inputs)
+        return self._fcnet(inputs) + self._bias_init
 
 
     def __call__(self, *args, **kwargs):
@@ -148,7 +151,7 @@ class ConditionalBernoulli(object):
 class ConditionalCategorical(object):
     """A RelaxedOneHotCategorical distribution conditioned on Tensor inputs via a dense network."""
 
-    def __init__(self, size, hidden_layer_sizes=None, temperature=1.0, initialisers=DEFAULT_INITIALISERS, 
+    def __init__(self, size, hidden_layer_sizes=None, temperature=1.0, initializers=DEFAULT_INITIALIZERS, 
                  hidden_activation_fn=tf.nn.relu, name='cond_categorical'):
         """Creates a conditional RelaxedOneHotCategorical distribution.
 
@@ -159,9 +162,9 @@ class ConditionalCategorical(object):
                 then the default is a single-layered dense network.
             temperature: Degree of how approximately discrete the distribution is. The closer 
                 to 0, the more discrete and the closer to infinity, the more uniform.
-            initialisers: The variable initializers to use for the fully connected
+            initializers: The variable initializers to use for the fully connected
                 network. The network is implemented using snt.nets.MLP so it must
-                be a dictionary mapping the keys 'w' and 'b' to the initialisers for
+                be a dictionary mapping the keys 'w' and 'b' to the initializers for
                 the weights and biases.
             hidden_activation_fn: The activation function to use on the hidden layers
                 of the fully connected network.
@@ -176,7 +179,7 @@ class ConditionalCategorical(object):
             self._fcnet = snt.nets.MLP(
                 output_sizes=hidden_layer_sizes + [size],
                 activation=hidden_activation_fn,
-                initializers=initialisers,
+                initializers=initializers,
                 activate_final=False,
                 use_bias=True,
                 name=name + '_fcnet')
@@ -184,7 +187,7 @@ class ConditionalCategorical(object):
             self._fcnet = snt.nets.MLP(
                 output_sizes=[size],
                 activation=hidden_activation_fn,
-                initializers=initialisers,
+                initializers=initializers,
                 activate_final=False,
                 use_bias=True,
                 name=name + '_fcnet')
