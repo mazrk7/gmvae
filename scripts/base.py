@@ -54,7 +54,6 @@ class ConditionalNormal(object):
         else:
             self._fcnet = snt.nets.MLP(
                 output_sizes=[2*size],
-                activation=hidden_activation_fn,
                 initializers=initializers,
                 activate_final=False,
                 use_bias=True,
@@ -87,7 +86,7 @@ class ConditionalNormal(object):
 class ConditionalBernoulli(object):
     """A Bernoulli distribution conditioned on Tensor inputs via a dense network."""
 
-    def __init__(self, size, hidden_layer_sizes, initializers=DEFAULT_INITIALIZERS, 
+    def __init__(self, size, hidden_layer_sizes=None, initializers=DEFAULT_INITIALIZERS, 
                  bias_init=0.0, hidden_activation_fn=tf.nn.relu, name='cond_bernoulli'):
         """Creates a conditional Bernoulli distribution.
 
@@ -122,7 +121,6 @@ class ConditionalBernoulli(object):
         else:
             self._fcnet = snt.nets.MLP(
                 output_sizes=[size],
-                activation=hidden_activation_fn,
                 initializers=initializers,
                 activate_final=False,
                 use_bias=True,
@@ -186,7 +184,6 @@ class ConditionalCategorical(object):
         else:
             self._fcnet = snt.nets.MLP(
                 output_sizes=[size],
-                activation=hidden_activation_fn,
                 initializers=initializers,
                 activate_final=False,
                 use_bias=True,
