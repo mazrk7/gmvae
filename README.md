@@ -1,6 +1,6 @@
 # GMVAE
 
-This repository contains a TensorFlow implementation of a Gaussian Mixture Variational Autoencoder (GMVAE) on the MNIST dataset, specifically making use of the [Probability](https://www.tensorflow.org/probability) library.
+This repository contains a TensorFlow implementation of an unsupervised Gaussian Mixture Variational Autoencoder (GMVAE) on the MNIST dataset, specifically making use of the [Probability](https://www.tensorflow.org/probability) library.
 
 There are currently three models in use:
 - **VAE** is a standard implementation of the [Variational Autoencoder](https://arxiv.org/abs/1312.6114), with no convolutional layers  

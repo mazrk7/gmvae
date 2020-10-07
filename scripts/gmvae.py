@@ -307,7 +307,7 @@ def create_gmvae(
             to a sensible starting point e.g. mean of training set.
         temperature: Degree of how approximately discrete the Gumbel distribution that models
             the discrete latent variable y should be.
-        random_seed: A random seed for the VRNN resampling operations.
+        random_seed: A random seed for the sampling operations.
 
     Returns:
         model: A TrainableGMVAE object.
